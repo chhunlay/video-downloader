@@ -38,7 +38,7 @@ def download_video_or_audio(video_url, download_directory, download_type):
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    url = input("Enter the YouTube video URL: ")
+    url = input("Enter the YouTube video URL: ") 
     download_directory = 'Video-Downloader'  # Specify the main download directory
     download_type = input("Choose download type (video/audio): ").strip().lower()
     
