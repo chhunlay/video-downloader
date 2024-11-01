@@ -12,7 +12,7 @@ def download_video_or_audio(video_url, download_directory, download_type):
     # Specify the download options based on the user's choice
     if download_type == 'video':
         ydl_opts = {
-            'format': 'bestvideo+bestaudio/best',
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',  # Ensures downloading in MP4
             'outtmpl': os.path.join(media_directory, '%(title)s.%(ext)s'),  # Save file in the media subdirectory
         }
     elif download_type == 'audio':
