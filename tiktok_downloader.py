@@ -1,21 +1,24 @@
-import requests
+import asyncio
 from TikTokApi import TikTokApi
+from urllib.parse import urlparse
 
-def download_tiktok_video(video_url):
+async def download_tiktok_video(video_url):
     try:
-        # Create an instance of the TikTokApi
+        # Initialize TikTokApi instance
         api = TikTokApi()
 
-        # Extract the video ID from the URL
-        video_id = video_url.split('/')[-1].split('?')[0]
+        # Parse the video URL to extract the video ID
+        parsed_url = urlparse(video_url)
+        path_parts = parsed_url.path.split('/')
+        video_id = path_parts[-1] if path_parts[-1] else path_parts[-2]
 
-        # Get the video object using the video ID
+        # Get the video object
         video = api.video(id=video_id)
 
-        # Get the video bytes
-        video_data = video.bytes()  # Fetch the video content
+        # Get the video bytes (this is an async operation)
+        video_data = await video.bytes()  # Use await here
 
-        # Write the video to a file
+        # Save video data to a file
         video_filename = f"{video_id}.mp4"
         with open(video_filename, 'wb') as video_file:
             video_file.write(video_data)
@@ -27,4 +30,6 @@ def download_tiktok_video(video_url):
 
 # Get the TikTok video URL from user input
 tiktok_video_url = input("Enter the TikTok video URL: ")
-download_tiktok_video(tiktok_video_url)
+
+# Run the async function
+asyncio.run(download_tiktok_video(tiktok_video_url))
