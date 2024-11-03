@@ -10,12 +10,12 @@ def download_video_or_audio(video_url, download_directory, download_type):
         os.makedirs(media_directory)
 
     # Specify the download options based on the user's choice
-    if download_type == 'video':
+    if download_type in ['video', 'v']:
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',  # Ensures downloading in MP4
             'outtmpl': os.path.join(media_directory, '%(title)s.%(ext)s'),  # Save file in the media subdirectory
         }
-    elif download_type == 'audio':
+    elif download_type in ['audio', 'a']:
         ydl_opts = {
             'format': 'bestaudio',
             'postprocessors': [{
@@ -38,12 +38,12 @@ def download_video_or_audio(video_url, download_directory, download_type):
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    url = input("Enter the YouTube video URL: ") 
+    url = input("Enter the YouTube video URL: ").strip()
     download_directory = 'Video-Downloader'  # Specify the main download directory
     download_type = input("Choose download type (video/audio): ").strip().lower()
-    
+
     # Validate input and call the download function
-    if download_type in ['video', 'audio']:
+    if download_type in ['video', 'v', 'audio', 'a']:
         download_video_or_audio(url, download_directory, download_type)
     else:
         print("Invalid option selected. Please enter 'video' or 'audio'.")
