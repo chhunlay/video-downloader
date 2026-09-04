@@ -4,3 +4,5 @@ pillow==12.2.0
 requests==2.33.1
 pywebview==6.2.1
 pyinstaller==6.11.1
+python-telegram-bot==21.10
+python-dotenv==1.2.3

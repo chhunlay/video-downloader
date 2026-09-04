@@ -199,6 +199,9 @@
            class="file-link hidden fade-up mt-5 w-full flex items-center justify-center gap-2 font-bold py-3 px-4 rounded-xl transition-colors">
             🎉 Save File
         </a>
+        <p id="downloadHint" class="hidden fade-up text-xs text-muted text-center mt-2">
+            Opens the video — tap the <strong>Share</strong> icon, then <strong>Save Video</strong> to add it to Photos.
+        </p>
     </div>
 
     <p class="text-center text-xs text-faint mt-5">For personal use only · Respect creators' rights</p>
@@ -303,9 +306,11 @@ function startDownload(dtype) {
     const percentLabel = document.getElementById('percentLabel');
     const bar = document.getElementById('bar');
     const downloadLink = document.getElementById('downloadLink');
+    const downloadHint = document.getElementById('downloadHint');
 
     progressCard.classList.remove('hidden');
     downloadLink.classList.add('hidden');
+    downloadHint.classList.add('hidden');
     bar.style.width = '0%';
     percentLabel.innerText = '0%';
     statusText.innerText = 'Status: Starting…';
@@ -326,7 +331,20 @@ function startDownload(dtype) {
         if (data.status === "done") {
             evt.close();
             statusText.innerText = "✅ Download complete";
+
+            // Tried linking to an inline (non-attachment) copy so iOS's
+            // native Share sheet could offer "Save Video" directly - but
+            // in practice this routed through whatever app iOS/the
+            // browser's "Open in..." picker defaulted to (a DJ app, in
+            // one real test), not reliably Safari's own player. A plain
+            // forced download -> Files app -> Share -> Save Video is
+            // less convenient but actually works consistently, so that's
+            // what every platform gets now.
             const filePath = "/downloads/" + encodeURIComponent(data.filename);
+            downloadLink.innerText = "🎉 Save File";
+            downloadHint.classList.add('hidden');
+            downloadLink.setAttribute('target', '_blank');
+
             downloadLink.href = filePath;
             downloadLink.classList.remove('hidden');
         }
