@@ -73,6 +73,38 @@
             box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15);
         }
 
+        @keyframes pulseGlow {
+            0%, 100% {
+                border-color: rgba(129, 140, 248, 0.35);
+                box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.18);
+            }
+            50% {
+                border-color: rgba(129, 140, 248, 0.7);
+                box-shadow: 0 0 0 5px rgba(99, 102, 241, 0.1);
+            }
+        }
+        .url-input.is-loading {
+            animation: pulseGlow 1.6s ease-in-out infinite;
+        }
+
+        #loadingSpinner {
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+        }
+        #loadingSpinner.visible { opacity: 1; }
+
+        #fetchingLabel {
+            opacity: 0;
+            max-height: 0;
+            transition: opacity 0.2s ease, max-height 0.2s ease;
+            overflow: hidden;
+        }
+        #fetchingLabel.visible {
+            opacity: 1;
+            max-height: 1.5rem;
+        }
+
         .theme-toggle {
             background: var(--input-bg);
             border: 1px solid var(--input-border);
@@ -144,11 +176,21 @@
             <input id="url" type="text" placeholder="Paste a YouTube or TikTok link…"
                    autocomplete="off" autocorrect="off" spellcheck="false"
                    class="url-input w-full py-3 pl-4 pr-10 rounded-xl outline-none transition-all">
-            <svg id="loadingSpinner" class="hidden absolute right-3 top-1/2 -translate-y-1/2 animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
-            </svg>
+            <!-- A wrapper handles vertical centering (inset-y-0 + flex) so
+                 the spinning SVG only ever needs "animate-spin" (a bare
+                 rotate). Centering it directly on the SVG via -translate-y-1/2
+                 fought with animate-spin's own transform each frame,
+                 making the icon visibly drift up/down as it spun. -->
+            <div class="absolute right-3 inset-y-0 flex items-center pointer-events-none">
+                <svg id="loadingSpinner" class="animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                </svg>
+            </div>
         </div>
+        <p id="fetchingLabel" class="text-xs text-indigo-400 font-medium flex items-center gap-1.5">
+            <span>Fetching preview…</span>
+        </p>
 
         <!-- Error / Not Found Message -->
         <p id="errorMessage" class="hidden fade-up text-rose-400 text-sm font-medium mt-3 flex items-center gap-1.5">
@@ -168,7 +210,7 @@
 
             <!-- Download Buttons -->
             <div id="downloadButtons" class="grid grid-cols-2 gap-2.5 mt-5">
-                <button onclick="startDownload('video')"
+                <button onclick="handleVideoClick()"
                         class="action-btn col-span-1 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
                     ⬇️ Video
                 </button>
@@ -176,6 +218,25 @@
                         class="action-btn col-span-1 flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-emerald-500/20">
                     🎵 Audio
                 </button>
+
+                <!-- Resolution Picker - hidden until "Video" is clicked
+                     above, and only when the site exposes resolution
+                     info at all (not shown for TikTok, whose format
+                     selection already picks a specific stream). -->
+                <div id="resolutionPicker" class="hidden col-span-2">
+                    <label class="block mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Resolution</label>
+                    <select id="resolutionSelect" class="url-input w-full py-2.5 px-3 rounded-xl outline-none">
+                        <option value="">Best available</option>
+                    </select>
+                    <p id="resolutionLimitedNote" class="hidden text-xs text-amber-400 mt-1.5">
+                        ⚠️ Only low quality is available for this video right now (an active site restriction, not something this app controls).
+                    </p>
+                    <button onclick="startDownload('video')"
+                            class="action-btn w-full mt-2.5 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
+                        ⬇️ Download
+                    </button>
+                </div>
+
                 <button onclick="startDownload('tiktok')"
                         class="action-btn col-span-2 flex items-center justify-center gap-2 bg-gradient-to-r from-pink-500 to-fuchsia-500 hover:from-pink-400 hover:to-fuchsia-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-pink-500/20">
                     🎬 TikTok — No Watermark
@@ -244,6 +305,12 @@ document.getElementById('themeToggle').addEventListener('click', () => {
 // Browsers restore form field values (and bfcache pages) on refresh/back,
 // which left the URL box and old preview showing after a reload. Force a
 // clean slate every time the page becomes visible.
+function setFetching(isLoading) {
+    document.getElementById('url').classList.toggle('is-loading', isLoading);
+    document.getElementById('loadingSpinner').classList.toggle('visible', isLoading);
+    document.getElementById('fetchingLabel').classList.toggle('visible', isLoading);
+}
+
 function resetForm() {
     const urlInput = document.getElementById('url');
     urlInput.value = '';
@@ -251,13 +318,14 @@ function resetForm() {
     document.getElementById('errorMessage').classList.add('hidden');
     document.getElementById('progressCard').classList.add('hidden');
     document.getElementById('downloadLink').classList.add('hidden');
-    document.getElementById('loadingSpinner').classList.add('hidden');
+    setFetching(false);
 }
 resetForm();
 window.addEventListener('pageshow', resetForm);
 
 // ---------- Video info lookup ----------
 let debounceTimer;
+let currentResolutions = [];
 
 document.getElementById('url').addEventListener('input', () => {
     clearTimeout(debounceTimer);
@@ -271,7 +339,7 @@ document.getElementById('url').addEventListener('input', () => {
     if (!url) return;
 
     debounceTimer = setTimeout(() => {
-        document.getElementById('loadingSpinner').classList.remove('hidden');
+        setFetching(true);
 
         fetch("/info", {
             method: "POST",
@@ -280,24 +348,58 @@ document.getElementById('url').addEventListener('input', () => {
         })
         .then(res => res.json())
         .then(data => {
-            document.getElementById('loadingSpinner').classList.add('hidden');
+            setFetching(false);
 
             if (!data.error) {
                 document.getElementById('videoInfo').classList.remove('hidden');
                 document.getElementById('thumbnail').src = data.thumbnail;
                 document.getElementById('videoTitle').innerText = data.title;
                 document.getElementById('videoUploader').innerText = "By " + data.uploader;
+
+                const resolutionSelect = document.getElementById('resolutionSelect');
+                const resolutionLimitedNote = document.getElementById('resolutionLimitedNote');
+
+                // Picker stays hidden here regardless - it only reveals
+                // when "Video" is actually clicked (handleVideoClick).
+                // This just prepares its contents ahead of time.
+                document.getElementById('resolutionPicker').classList.add('hidden');
+                currentResolutions = data.resolutions || [];
+
+                if (currentResolutions.length > 0) {
+                    resolutionSelect.innerHTML = '<option value="">Best available</option>' +
+                        currentResolutions.map(h => `<option value="${h}">${h}p</option>`).join('');
+
+                    // A real, unrestricted video normally has several
+                    // resolutions up to 720p/1080p+. Seeing only one or
+                    // two options capped low is the signature of a site
+                    // (most often YouTube) currently rate-limiting or
+                    // bot-checking this app - not a picker bug.
+                    const maxRes = Math.max(...currentResolutions);
+                    resolutionLimitedNote.classList.toggle('hidden', !(currentResolutions.length <= 1 || maxRes < 480));
+                }
             } else {
                 document.getElementById('errorMessage').classList.remove('hidden');
             }
         })
         .catch(err => {
-            document.getElementById('loadingSpinner').classList.add('hidden');
+            setFetching(false);
             document.getElementById('errorMessage').classList.remove('hidden');
             console.error(err);
         });
     }, 500);
 });
+
+// "Video" button: if this video actually has resolution choices to
+// make, reveal the picker (+ its own "Download" button) instead of
+// downloading immediately. If there's nothing to pick (site exposed no
+// format info at all), just download at best quality right away.
+function handleVideoClick() {
+    if (currentResolutions.length > 0) {
+        document.getElementById('resolutionPicker').classList.remove('hidden');
+    } else {
+        startDownload('video');
+    }
+}
 
 function startDownload(dtype) {
     const urlInput = document.getElementById('url');
@@ -315,10 +417,17 @@ function startDownload(dtype) {
     percentLabel.innerText = '0%';
     statusText.innerText = 'Status: Starting…';
 
+    // Only "video" downloads honor a resolution cap - TikTok's format
+    // selection already targets a specific stream, and audio has no
+    // resolution concept.
+    const resolution = dtype === 'video'
+        ? document.getElementById('resolutionSelect').value
+        : '';
+
     fetch("/download", {
         method: "POST",
         headers: {"Content-Type": "application/x-www-form-urlencoded"},
-        body: `url=${encodeURIComponent(urlInput.value)}&type=${dtype}`
+        body: `url=${encodeURIComponent(urlInput.value)}&type=${dtype}&resolution=${encodeURIComponent(resolution)}`
     });
 
     const evt = new EventSource("/progress");

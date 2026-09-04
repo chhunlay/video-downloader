@@ -4,7 +4,7 @@ import threading
 import time
 import json
 
-from downloader import download_media, get_video_info
+from downloader import download_media, get_video_info, get_available_resolutions
 
 app = Flask(__name__)
 
@@ -34,13 +34,15 @@ def progress_hook(d):
         progress_data["status"] = "error"
 
 
-def download_task(url, dtype):
+def download_task(url, dtype, resolution=None):
     progress_data["percent"] = 0
     progress_data["status"] = "starting"
     progress_data["filename"] = ""
 
     try:
-        final_path = download_media(url, dtype, DOWNLOAD_DIR, progress_hook=progress_hook)
+        final_path = download_media(
+            url, dtype, DOWNLOAD_DIR, progress_hook=progress_hook, resolution=resolution
+        )
         progress_data["filename"] = os.path.basename(final_path)
         progress_data["status"] = "done"
 
@@ -57,8 +59,9 @@ def index():
 def download():
     url = request.form.get("url")
     dtype = request.form.get("type")
+    resolution = request.form.get("resolution")  # e.g. "720", or absent for best available
 
-    thread = threading.Thread(target=download_task, args=(url, dtype))
+    thread = threading.Thread(target=download_task, args=(url, dtype, resolution))
     thread.start()
 
     return jsonify({"started": True})
@@ -101,7 +104,8 @@ def video_info():
             "title": info.get("title"),
             "thumbnail": info.get("thumbnail"),
             "uploader": info.get("uploader"),
-            "duration": info.get("duration")
+            "duration": info.get("duration"),
+            "resolutions": get_available_resolutions(info),
         })
 
     except Exception as e:

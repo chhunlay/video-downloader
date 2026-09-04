@@ -7,6 +7,7 @@ between two separate copies.
 """
 
 import os
+import re
 import time
 
 import requests
@@ -40,10 +41,113 @@ def extract_info_with_retry(ydl, url, download, attempts=5, delay=3):
     raise last_error
 
 
+# YouTube increasingly demands proof of a real logged-in browser session
+# ("Sign in to confirm you're not a bot") for its normal ("web") client,
+# even with no unusual request volume. There's no clean bypass for that -
+# it's a server-side identity check, not a client-side quirk. What *does*
+# still get through without any login is pretending to be the YouTube
+# Android app instead of a browser - at a real cost: YouTube's SABR
+# streaming restriction limits the Android client to a single legacy
+# ~240p format, nothing higher, when unauthenticated. So: try the normal
+# (full-quality) path first, and only fall back to the low-quality
+# Android path if YouTube specifically demands sign-in.
+YOUTUBE_SIGN_IN_HINT = "sign in to confirm"
+
+
+def extract_info_with_fallback(ydl_opts, url, download):
+    """
+    Returns (info, effective_opts) - effective_opts is ydl_opts as
+    actually used (possibly with the Android-client fallback merged in),
+    which callers that need prepare_filename() must reuse to build a
+    YoutubeDL with matching settings (outtmpl, etc.).
+    """
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            return extract_info_with_retry(ydl, url, download), ydl_opts
+        except yt_dlp.utils.DownloadError as e:
+            if YOUTUBE_SIGN_IN_HINT not in str(e).lower():
+                raise
+
+    fallback_opts = dict(ydl_opts)
+    fallback_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+    with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+        return extract_info_with_retry(ydl, url, download), fallback_opts
+
+
 def get_video_info(url):
     """Metadata-only lookup (title, thumbnail, uploader, duration, ...)."""
-    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-        return extract_info_with_retry(ydl, url, download=False)
+    info, _ = extract_info_with_fallback({'quiet': True, 'no_warnings': True}, url, download=False)
+    return info
+
+
+def get_available_resolutions(info):
+    """
+    Returns the distinct video heights (e.g. [1080, 720, 480]) available
+    for this already-fetched info dict, highest first - for populating a
+    resolution picker. Empty list if the site/extractor exposes no
+    height info (e.g. audio-only content, or a site yt-dlp can't inspect
+    formats for).
+    """
+    heights = {
+        f["height"]
+        for f in info.get("formats", [])
+        if f.get("vcodec") not in (None, "none") and f.get("height")
+    }
+    return sorted(heights, reverse=True)
+
+
+# Junk commonly appended to YouTube upload titles that hurts a music
+# search match - stripped before querying iTunes.
+_TITLE_JUNK_RE = re.compile(
+    r"""[\[(][^\])]*
+        (?:official|lyric|lyrics|audio|video|mv|hd|hq|4k|remaster\w*|
+           visualiz\w*|explicit)
+        [^\])]*[\])]
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def clean_title_for_search(title):
+    cleaned = _TITLE_JUNK_RE.sub("", title or "")
+    cleaned = cleaned.replace("|", " ").strip(" -|")
+    return cleaned.strip()
+
+
+def get_itunes_cover_art(title):
+    """
+    Looks up `title` on iTunes' free public search API (no key required)
+    and returns a high-resolution official cover art URL for the best
+    match, or None if nothing reasonable was found (any error is treated
+    the same as "no match" - this is a nice-to-have, never worth failing
+    the whole download over).
+    """
+    query = clean_title_for_search(title)
+    if not query:
+        return None
+
+    try:
+        response = requests.get(
+            "https://itunes.apple.com/search",
+            params={"term": query, "entity": "song", "limit": 1},
+            timeout=8,
+        )
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        if not results:
+            return None
+
+        # iTunes serves artwork at a small fixed size by default (e.g.
+        # ".../100x100bb.jpg") - swap in a much larger size, which the
+        # same CDN happily serves for the same image.
+        artwork_url = results[0].get("artworkUrl100")
+        if not artwork_url:
+            return None
+        return re.sub(r"\d+x\d+bb\.jpg$", "1200x1200bb.jpg", artwork_url)
+
+    except Exception as e:
+        print("iTunes cover art lookup failed:", e)
+        return None
 
 
 def make_square(image_path):
@@ -66,7 +170,7 @@ def make_square(image_path):
         print("Thumbnail processing error:", e)
 
 
-def download_media(url, dtype, out_dir, progress_hook=None):
+def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     """
     Downloads a video ("video"), audio ("audio"), or watermark-free
     TikTok clip ("tiktok") from `url` into `out_dir`.
@@ -74,6 +178,13 @@ def download_media(url, dtype, out_dir, progress_hook=None):
     `progress_hook` is optional and receives yt-dlp's normal progress
     dict (status/percent/etc.) - pass one to report live progress (the
     web app does; the Telegram bot doesn't need to).
+
+    `resolution` (dtype == "video" only) caps the download to that
+    height or less, e.g. 720 for "720p or the closest lower option this
+    video actually has". None (default) downloads the best available.
+    Ignored for "audio" and "tiktok" (TikTok's format selection already
+    picks a specific single stream to dodge the watermark - there's
+    nothing to cap).
 
     Returns the absolute path of the final downloaded file. Raises on
     failure (typically yt_dlp.utils.DownloadError, or ValueError for a
@@ -105,11 +216,21 @@ def download_media(url, dtype, out_dir, progress_hook=None):
     # ================= GET BEST THUMBNAIL (audio only) =================
     if dtype == "audio":
         info_for_thumb = get_video_info(url)
-        thumbnails = info_for_thumb.get("thumbnails", [])
 
-        if thumbnails:
-            best_thumb = max(thumbnails, key=lambda t: t.get("width", 0))
-            thumb_url = best_thumb["url"]
+        # Prefer the real, official song cover art (from iTunes) over the
+        # video's own thumbnail, which is often just a still frame, a
+        # lyric-video background, or otherwise unrelated to the actual
+        # album art. Falls back to the video thumbnail whenever no good
+        # iTunes match is found.
+        thumb_url = get_itunes_cover_art(info_for_thumb.get("title", ""))
+
+        if not thumb_url:
+            thumbnails = info_for_thumb.get("thumbnails", [])
+            if thumbnails:
+                best_thumb = max(thumbnails, key=lambda t: t.get("width", 0))
+                thumb_url = best_thumb["url"]
+
+        if thumb_url:
             thumb_path = os.path.join(out_dir, "thumb_temp.jpg")
 
             try:
@@ -150,14 +271,21 @@ def download_media(url, dtype, out_dir, progress_hook=None):
             'format': 'best[format_id!=download]/best'
         })
     else:
+        if resolution:
+            # Cap at the chosen height; falls through to the closest
+            # lower option (yt-dlp's own comparison operators) if this
+            # exact video doesn't have that exact resolution.
+            height_filter = f"[height<={int(resolution)}]"
+        else:
+            height_filter = ""
         ydl_opts.update({
-            'format': 'bestvideo+bestaudio/best'
+            'format': f'bestvideo{height_filter}+bestaudio/best{height_filter}/best'
         })
 
     # ================= DOWNLOAD =================
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = extract_info_with_retry(ydl, url, download=True)
+    info, effective_opts = extract_info_with_fallback(ydl_opts, url, download=True)
 
+    with yt_dlp.YoutubeDL(effective_opts) as ydl:
         # prepare_filename() applies the same 80-char truncation and
         # character sanitization as the outtmpl above, so this always
         # matches what yt-dlp actually wrote to disk. Building the name
