@@ -1,6 +1,10 @@
-# downloaded media and personal session cookies - never commit these
+# downloaded media, personal session cookies, and secrets - never commit these
 downloads/
 cookies.txt
+.env
+# the root repo's .gitignore blanket-excludes all dotfiles - un-ignore the
+# safe template so the project stays usable by anyone cloning it
+!.env.example
 
 # PyInstaller build output
 build/
