@@ -2,84 +2,273 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>YouTube Downloader</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Downloader</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-1: #1e2a4a;
+            --bg-2: #0b0f1c;
+            --bg-3: #05070d;
+            --card-bg: rgba(255, 255, 255, 0.04);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --text-faint: #475569;
+            --input-bg: rgba(255, 255, 255, 0.05);
+            --input-border: rgba(255, 255, 255, 0.1);
+            --preview-bg: rgba(0, 0, 0, 0.4);
+            --preview-border: rgba(255, 255, 255, 0.1);
+            --track-bg: rgba(255, 255, 255, 0.05);
+            --track-border: rgba(255, 255, 255, 0.1);
+            --file-btn-bg: #ffffff;
+            --file-btn-text: #0f172a;
+            --file-btn-hover: #e2e8f0;
+        }
+        html[data-theme="light"] {
+            --bg-1: #eef2ff;
+            --bg-2: #f8fafc;
+            --bg-3: #ffffff;
+            --card-bg: rgba(255, 255, 255, 0.75);
+            --card-border: rgba(15, 23, 42, 0.08);
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --text-faint: #94a3b8;
+            --input-bg: rgba(15, 23, 42, 0.03);
+            --input-border: rgba(15, 23, 42, 0.1);
+            --preview-bg: rgba(15, 23, 42, 0.05);
+            --preview-border: rgba(15, 23, 42, 0.08);
+            --track-bg: rgba(15, 23, 42, 0.06);
+            --track-border: rgba(15, 23, 42, 0.08);
+            --file-btn-bg: #0f172a;
+            --file-btn-text: #ffffff;
+            --file-btn-hover: #1e293b;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: radial-gradient(circle at 15% 0%, var(--bg-1) 0%, var(--bg-2) 45%, var(--bg-3) 100%);
+            color: var(--text-main);
+            transition: background 0.25s ease, color 0.25s ease;
+        }
+
+        .glass-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            backdrop-filter: blur(20px);
+            transition: background 0.25s ease, border-color 0.25s ease;
+        }
+
+        .url-input {
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            color: var(--text-main);
+        }
+        .url-input::placeholder { color: var(--text-faint); }
+        .url-input:focus {
+            border-color: rgba(129, 140, 248, 0.6);
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15);
+        }
+
+        .theme-toggle {
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            color: var(--text-main);
+        }
+
+        .action-btn {
+            transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+        }
+        .action-btn:hover { transform: translateY(-2px); }
+        .action-btn:active { transform: translateY(0); }
+
+        .thumb-wrap {
+            aspect-ratio: 3 / 4;
+            max-height: 420px;
+            background: var(--preview-bg);
+            border: 1px solid var(--preview-border);
+        }
+
+        .text-muted { color: var(--text-muted); }
+        .text-faint { color: var(--text-faint); }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-up { animation: fadeUp 0.35s ease both; }
+
+        .progress-track {
+            background: var(--track-bg);
+            border: 1px solid var(--track-border);
+        }
+        .progress-bar {
+            background: linear-gradient(90deg, #6366f1, #ec4899);
+            transition: width 0.3s ease;
+        }
+
+        .file-link {
+            background: var(--file-btn-bg);
+            color: var(--file-btn-text);
+        }
+        .file-link:hover { background: var(--file-btn-hover); }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+<body class="min-h-screen flex items-center justify-center p-4 sm:p-6">
 
-<div class="w-full max-w-lg p-6 bg-white rounded-xl shadow-lg">
-    <h1 class="text-2xl font-bold text-center mb-6">📥 YouTube Downloader</h1>
+<div class="w-full max-w-md">
 
-    <label class="block mb-2 font-semibold">YouTube URL</label>
-    <input id="url" type="text" placeholder="Enter video URL"
-           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4">
+    <!-- Header -->
+    <div class="relative text-center mb-6">
+        <button id="themeToggle" type="button"
+                class="theme-toggle absolute right-0 top-0 w-10 h-10 rounded-xl flex items-center justify-center hover:opacity-80 transition-opacity"
+                aria-label="Toggle theme">
+            <span id="themeIcon">🌙</span>
+        </button>
 
-    <!-- Loading Spinner -->
-    <div id="loading" class="hidden flex justify-center items-center mb-2">
-        <svg class="animate-spin h-6 w-6 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
-        </svg>
-        <span class="ml-2 text-gray-600">Fetching video info...</span>
-    </div>
-
-    <!-- Error / Not Found Message -->
-    <div id="errorMessage" class="hidden text-red-500 font-semibold text-center mb-4">
-        😢 Video not found or invalid URL
-    </div>
-
-    <!-- Video Info Preview -->
-    <div id="videoInfo" class="hidden p-4 bg-gray-100 rounded-lg mb-4 text-center">
-        <img id="thumbnail" class="mx-auto mb-2 rounded" width="320">
-        <h2 id="videoTitle" class="font-semibold text-lg"></h2>
-        <p id="videoUploader" class="text-sm text-gray-600 mb-4"></p>
-
-        <!-- Download Buttons -->
-        <div id="downloadButtons" class="space-x-4">
-            <button onclick="startDownload('video')"
-                    class="bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors">
-                ⬇️ Download Video
-            </button>
-            <button onclick="startDownload('audio')"
-                    class="bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600 transition-colors">
-                🎵 Download Audio
-            </button>
+        <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-pink-500 shadow-lg shadow-indigo-500/20 mb-3">
+            <span class="text-2xl">📥</span>
         </div>
+        <h1 class="text-2xl font-extrabold tracking-tight">Video Downloader</h1>
+        <p class="text-muted text-sm mt-1">YouTube, TikTok &amp; more — video or audio</p>
     </div>
 
-    <!-- Progress Card -->
-    <div id="progressCard" class="hidden p-4 bg-gray-100 rounded-lg mb-4">
-        <p id="status" class="font-semibold mb-2">Status: Idle</p>
-        <div class="w-full bg-gray-300 rounded-full h-4">
-            <div id="bar" class="bg-blue-500 h-4 rounded-full w-0"></div>
+    <!-- Card -->
+    <div class="glass-card rounded-3xl shadow-2xl shadow-black/40 p-6">
+
+        <label class="block mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Video URL</label>
+        <div class="relative mb-1">
+            <input id="url" type="text" placeholder="Paste a YouTube or TikTok link…"
+                   autocomplete="off" autocorrect="off" spellcheck="false"
+                   class="url-input w-full py-3 pl-4 pr-10 rounded-xl outline-none transition-all">
+            <svg id="loadingSpinner" class="hidden absolute right-3 top-1/2 -translate-y-1/2 animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+            </svg>
         </div>
-    </div>
 
-    <!-- Download Link -->
-    <div id="downloadLink" class="mt-4 hidden">
-        <a id="fileLink" href="#" class="text-blue-600 font-bold hover:underline" target="_blank">
-            🎉 Download Ready
+        <!-- Error / Not Found Message -->
+        <p id="errorMessage" class="hidden fade-up text-rose-400 text-sm font-medium mt-3 flex items-center gap-1.5">
+            <span>😢</span> Video not found or invalid URL
+        </p>
+
+        <!-- Video Info Preview -->
+        <div id="videoInfo" class="hidden fade-up mt-5">
+            <div class="thumb-wrap w-full rounded-2xl overflow-hidden flex items-center justify-center">
+                <img id="thumbnail" class="w-full h-full object-cover">
+            </div>
+
+            <div class="mt-4 text-center">
+                <h2 id="videoTitle" class="font-semibold text-base leading-snug line-clamp-2"></h2>
+                <p id="videoUploader" class="text-sm text-muted mt-1"></p>
+            </div>
+
+            <!-- Download Buttons -->
+            <div id="downloadButtons" class="grid grid-cols-2 gap-2.5 mt-5">
+                <button onclick="startDownload('video')"
+                        class="action-btn col-span-1 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
+                    ⬇️ Video
+                </button>
+                <button onclick="startDownload('audio')"
+                        class="action-btn col-span-1 flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-emerald-500/20">
+                    🎵 Audio
+                </button>
+                <button onclick="startDownload('tiktok')"
+                        class="action-btn col-span-2 flex items-center justify-center gap-2 bg-gradient-to-r from-pink-500 to-fuchsia-500 hover:from-pink-400 hover:to-fuchsia-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-pink-500/20">
+                    🎬 TikTok — No Watermark
+                </button>
+            </div>
+        </div>
+
+        <!-- Progress Card -->
+        <div id="progressCard" class="hidden fade-up mt-5">
+            <div class="flex items-center justify-between mb-2">
+                <p id="status" class="text-sm font-medium text-muted">Status: Idle</p>
+                <p id="percentLabel" class="text-sm font-semibold text-indigo-400">0%</p>
+            </div>
+            <div class="progress-track w-full rounded-full h-2.5 overflow-hidden">
+                <div id="bar" class="progress-bar h-full rounded-full w-0"></div>
+            </div>
+        </div>
+
+        <!-- Download Link -->
+        <a id="downloadLink" href="#" target="_blank"
+           class="file-link hidden fade-up mt-5 w-full flex items-center justify-center gap-2 font-bold py-3 px-4 rounded-xl transition-colors">
+            🎉 Save File
         </a>
     </div>
+
+    <p class="text-center text-xs text-faint mt-5">For personal use only · Respect creators' rights</p>
 </div>
 
 <script>
-let timeout;
+// ---------- Theme ----------
+const THEME_KEY = 'video-downloader-theme';
+const html = document.documentElement;
+const themeIcon = document.getElementById('themeIcon');
 
-// Real-time video info fetching with debounce
+function applyTheme(theme) {
+    if (theme === 'light') {
+        html.setAttribute('data-theme', 'light');
+        themeIcon.textContent = '☀️';
+    } else {
+        html.setAttribute('data-theme', 'dark');
+        themeIcon.textContent = '🌙';
+    }
+}
+
+function getStoredTheme() {
+    try {
+        return localStorage.getItem(THEME_KEY);
+    } catch (e) {
+        return null;
+    }
+}
+
+const systemPrefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+applyTheme(getStoredTheme() || (systemPrefersLight ? 'light' : 'dark'));
+
+document.getElementById('themeToggle').addEventListener('click', () => {
+    const next = html.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    applyTheme(next);
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+});
+
+// ---------- Reset stale input on load/refresh ----------
+// Browsers restore form field values (and bfcache pages) on refresh/back,
+// which left the URL box and old preview showing after a reload. Force a
+// clean slate every time the page becomes visible.
+function resetForm() {
+    const urlInput = document.getElementById('url');
+    urlInput.value = '';
+    document.getElementById('videoInfo').classList.add('hidden');
+    document.getElementById('errorMessage').classList.add('hidden');
+    document.getElementById('progressCard').classList.add('hidden');
+    document.getElementById('downloadLink').classList.add('hidden');
+    document.getElementById('loadingSpinner').classList.add('hidden');
+}
+resetForm();
+window.addEventListener('pageshow', resetForm);
+
+// ---------- Video info lookup ----------
+let debounceTimer;
+
 document.getElementById('url').addEventListener('input', () => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => {
-        const url = document.getElementById('url').value;
+    clearTimeout(debounceTimer);
+    const url = document.getElementById('url').value;
 
-        // Hide messages first
-        document.getElementById('videoInfo').classList.add('hidden');
-        document.getElementById('errorMessage').classList.add('hidden');
+    document.getElementById('videoInfo').classList.add('hidden');
+    document.getElementById('errorMessage').classList.add('hidden');
+    document.getElementById('progressCard').classList.add('hidden');
+    document.getElementById('downloadLink').classList.add('hidden');
 
-        if (!url) return;
+    if (!url) return;
 
-        // Show loading
-        document.getElementById('loading').classList.remove('hidden');
+    debounceTimer = setTimeout(() => {
+        document.getElementById('loadingSpinner').classList.remove('hidden');
 
         fetch("/info", {
             method: "POST",
@@ -88,20 +277,19 @@ document.getElementById('url').addEventListener('input', () => {
         })
         .then(res => res.json())
         .then(data => {
-            // Hide loading
-            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('loadingSpinner').classList.add('hidden');
 
             if (!data.error) {
                 document.getElementById('videoInfo').classList.remove('hidden');
                 document.getElementById('thumbnail').src = data.thumbnail;
                 document.getElementById('videoTitle').innerText = data.title;
-                document.getElementById('videoUploader').innerText = "By: " + data.uploader;
+                document.getElementById('videoUploader').innerText = "By " + data.uploader;
             } else {
                 document.getElementById('errorMessage').classList.remove('hidden');
             }
         })
         .catch(err => {
-            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('loadingSpinner').classList.add('hidden');
             document.getElementById('errorMessage').classList.remove('hidden');
             console.error(err);
         });
@@ -112,40 +300,40 @@ function startDownload(dtype) {
     const urlInput = document.getElementById('url');
     const progressCard = document.getElementById('progressCard');
     const statusText = document.getElementById('status');
+    const percentLabel = document.getElementById('percentLabel');
     const bar = document.getElementById('bar');
     const downloadLink = document.getElementById('downloadLink');
 
-    // Reset UI
     progressCard.classList.remove('hidden');
     downloadLink.classList.add('hidden');
     bar.style.width = '0%';
-    statusText.innerText = 'Status: Starting...';
+    percentLabel.innerText = '0%';
+    statusText.innerText = 'Status: Starting…';
 
-    // Start download
     fetch("/download", {
         method: "POST",
         headers: {"Content-Type": "application/x-www-form-urlencoded"},
         body: `url=${encodeURIComponent(urlInput.value)}&type=${dtype}`
     });
 
-    // Listen to SSE progress
     const evt = new EventSource("/progress");
     evt.onmessage = e => {
         const data = JSON.parse(e.data);
         bar.style.width = data.percent + '%';
-        statusText.innerText = `Status: ${data.status} | ${data.percent}%`;
+        percentLabel.innerText = data.percent + '%';
+        statusText.innerText = `Status: ${data.status}`;
 
         if (data.status === "done") {
             evt.close();
-            statusText.innerText = "✅ Download Completed!";
+            statusText.innerText = "✅ Download complete";
             const filePath = "/downloads/" + encodeURIComponent(data.filename);
-            document.getElementById('fileLink').href = filePath;
+            downloadLink.href = filePath;
             downloadLink.classList.remove('hidden');
         }
 
         if (data.status.startsWith("error")) {
             evt.close();
-            statusText.innerText = "❌ Error occurred: " + data.status;
+            statusText.innerText = "❌ " + data.status;
         }
     };
 }
