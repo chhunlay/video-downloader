@@ -1,0 +1,11 @@
+# downloaded media and personal session cookies - never commit these
+downloads/
+cookies.txt
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+__pycache__/
+*.pyc

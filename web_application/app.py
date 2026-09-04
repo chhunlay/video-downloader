@@ -19,6 +19,32 @@ progress_data = {
     "filename": ""
 }
 
+# TikTok's anti-scraping page intermittently returns a broken page to
+# yt-dlp (e.g. "Unable to extract universal data for rehydration") even
+# for videos that are perfectly available a moment later - retry a few
+# times before treating it as a real failure.
+TRANSIENT_ERROR_HINTS = (
+    "unable to extract universal data for rehydration",
+    "unexpected response from webpage request",
+    "please report this issue",
+    "status code 100001",
+)
+
+
+def extract_info_with_retry(ydl, url, download, attempts=5, delay=3):
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return ydl.extract_info(url, download=download)
+        except yt_dlp.utils.DownloadError as e:
+            last_error = e
+            message = str(e).lower()
+            is_transient = any(hint in message for hint in TRANSIENT_ERROR_HINTS)
+            if not is_transient or attempt == attempts:
+                raise
+            time.sleep(delay)
+    raise last_error
+
 def progress_hook(d):
     if d['status'] == 'downloading':
         total = d.get('total_bytes') or d.get('total_bytes_estimate')
@@ -81,7 +107,7 @@ def download_task(url, dtype):
         # ================= GET BEST THUMBNAIL =================
         if dtype == "audio":
             with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-                info = ydl.extract_info(url, download=False)
+                info = extract_info_with_retry(ydl, url, download=False)
 
             title = info.get("title", "audio")
 
@@ -129,13 +155,22 @@ def download_task(url, dtype):
                 'embedthumbnail': False,
                 'prefer_ffmpeg': True,
             })
+        elif dtype == "tiktok":
+            # TikTok's watermarked stream is always exposed as the format
+            # id "download" (format_note "...watermarked", lowercase -
+            # a plain substring filter on "Watermark" silently missed it).
+            # Excluding that id by name leaves only the clean h264/bytevc1
+            # play formats to choose from.
+            ydl_opts.update({
+                'format': 'best[format_id!=download]/best'
+            })
         else:
             ydl_opts.update({
                 'format': 'bestvideo+bestaudio/best'
             })
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            info = extract_info_with_retry(ydl, url, download=True)
 
             if dtype == "audio":
                 filename = f"{info.get('title', 'audio')}.mp3"
@@ -240,7 +275,7 @@ def video_info():
 
     try:
         with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = extract_info_with_retry(ydl, url, download=False)
 
         return jsonify({
             "title": info.get("title"),
@@ -254,4 +289,7 @@ def video_info():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Port 5000 collides with macOS AirPlay Receiver, which grabs it by
+    # default and returns 403 to browser requests before Flask ever sees
+    # them - use 5050 instead to avoid the conflict.
+    app.run(debug=True, port=5050)
