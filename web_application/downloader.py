@@ -279,7 +279,22 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
         else:
             height_filter = ""
         ydl_opts.update({
-            'format': f'bestvideo{height_filter}+bestaudio/best{height_filter}/best'
+            # Prefer genuinely mp4-native streams (h264 video + m4a
+            # audio) first - YouTube Shorts in particular often only
+            # advertises "best" as a VP9/webm pair, which downloaded as
+            # a .webm file instead of the .mp4 every other button here
+            # produces. Falling back to plain bestvideo+bestaudio keeps
+            # this working for sites/videos with no mp4 option at all.
+            'format': (
+                f'bestvideo[ext=mp4]{height_filter}+bestaudio[ext=m4a]/'
+                f'best[ext=mp4]{height_filter}/'
+                f'bestvideo{height_filter}+bestaudio/best{height_filter}/best'
+            ),
+            # Whatever combination of streams gets picked, remux the
+            # final container to mp4 - guarantees a .mp4 file (and a
+            # filename extension that actually matches it) even in the
+            # rare case only webm-native streams exist for this video.
+            'merge_output_format': 'mp4',
         })
 
     # ================= DOWNLOAD =================

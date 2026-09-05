@@ -210,11 +210,11 @@
 
             <!-- Download Buttons -->
             <div id="downloadButtons" class="grid grid-cols-2 gap-2.5 mt-5">
-                <button onclick="handleVideoClick()"
+                <button id="videoBtn" onclick="handleVideoClick()"
                         class="action-btn col-span-1 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
                     ⬇️ Video
                 </button>
-                <button onclick="startDownload('audio')"
+                <button id="audioBtn" onclick="startDownload('audio')"
                         class="action-btn col-span-1 flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-emerald-500/20">
                     🎵 Audio
                 </button>
@@ -222,7 +222,10 @@
                 <!-- Resolution Picker - hidden until "Video" is clicked
                      above, and only when the site exposes resolution
                      info at all (not shown for TikTok, whose format
-                     selection already picks a specific stream). -->
+                     selection already picks a specific stream). While
+                     it's open, Audio/TikTok hide too so the choice is
+                     just "pick a resolution, then Download" - Cancel
+                     brings the other options back. -->
                 <div id="resolutionPicker" class="hidden col-span-2">
                     <label class="block mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Resolution</label>
                     <select id="resolutionSelect" class="url-input w-full py-2.5 px-3 rounded-xl outline-none">
@@ -231,13 +234,19 @@
                     <p id="resolutionLimitedNote" class="hidden text-xs text-amber-400 mt-1.5">
                         ⚠️ Only low quality is available for this video right now (an active site restriction, not something this app controls).
                     </p>
-                    <button onclick="startDownload('video')"
-                            class="action-btn w-full mt-2.5 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
-                        ⬇️ Download
-                    </button>
+                    <div class="grid grid-cols-3 gap-2 mt-2.5">
+                        <button onclick="hideResolutionPicker()"
+                                class="action-btn col-span-1 flex items-center justify-center gap-2 bg-white/10 hover:bg-white/15 text-muted font-semibold py-3 px-4 rounded-xl">
+                            Cancel
+                        </button>
+                        <button onclick="startDownload('video')"
+                                class="action-btn col-span-2 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
+                            ⬇️ Download
+                        </button>
+                    </div>
                 </div>
 
-                <button onclick="startDownload('tiktok')"
+                <button id="tiktokBtn" onclick="startDownload('tiktok')"
                         class="action-btn col-span-2 flex items-center justify-center gap-2 bg-gradient-to-r from-pink-500 to-fuchsia-500 hover:from-pink-400 hover:to-fuchsia-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-pink-500/20">
                     🎬 TikTok — No Watermark
                 </button>
@@ -255,8 +264,13 @@
             </div>
         </div>
 
-        <!-- Download Link -->
-        <a id="downloadLink" href="#" target="_blank"
+        <!-- Download Link - deliberately no target="_blank": for a large
+             file (a full YouTube video can be 100s of MB, unlike a small
+             TikTok clip) opening a new tab just shows a blank/loading tab
+             for a long time with no visible progress, which reads as
+             "nothing happened" even though it may be downloading in the
+             background. Same-tab keeps the app visible while it downloads. -->
+        <a id="downloadLink" href="#"
            class="file-link hidden fade-up mt-5 w-full flex items-center justify-center gap-2 font-bold py-3 px-4 rounded-xl transition-colors">
             🎉 Save File
         </a>
@@ -359,10 +373,15 @@ document.getElementById('url').addEventListener('input', () => {
                 const resolutionSelect = document.getElementById('resolutionSelect');
                 const resolutionLimitedNote = document.getElementById('resolutionLimitedNote');
 
-                // Picker stays hidden here regardless - it only reveals
-                // when "Video" is actually clicked (handleVideoClick).
-                // This just prepares its contents ahead of time.
+                // Picker (and the Audio/TikTok buttons it hides while
+                // open) reset to their default state for every fresh
+                // video - the picker only reveals when "Video" is
+                // actually clicked (handleVideoClick). This just
+                // prepares the picker's contents ahead of time.
                 document.getElementById('resolutionPicker').classList.add('hidden');
+                document.getElementById('videoBtn').classList.remove('hidden');
+                document.getElementById('audioBtn').classList.remove('hidden');
+                document.getElementById('tiktokBtn').classList.remove('hidden');
                 currentResolutions = data.resolutions || [];
 
                 if (currentResolutions.length > 0) {
@@ -391,14 +410,26 @@ document.getElementById('url').addEventListener('input', () => {
 
 // "Video" button: if this video actually has resolution choices to
 // make, reveal the picker (+ its own "Download" button) instead of
-// downloading immediately. If there's nothing to pick (site exposed no
-// format info at all), just download at best quality right away.
+// downloading immediately, hiding Audio/TikTok so it reads as a
+// focused "pick a resolution" step rather than one more option among
+// several. If there's nothing to pick (site exposed no format info at
+// all), just download at best quality right away.
 function handleVideoClick() {
     if (currentResolutions.length > 0) {
         document.getElementById('resolutionPicker').classList.remove('hidden');
+        document.getElementById('videoBtn').classList.add('hidden');
+        document.getElementById('audioBtn').classList.add('hidden');
+        document.getElementById('tiktokBtn').classList.add('hidden');
     } else {
         startDownload('video');
     }
+}
+
+function hideResolutionPicker() {
+    document.getElementById('resolutionPicker').classList.add('hidden');
+    document.getElementById('videoBtn').classList.remove('hidden');
+    document.getElementById('audioBtn').classList.remove('hidden');
+    document.getElementById('tiktokBtn').classList.remove('hidden');
 }
 
 function startDownload(dtype) {
@@ -452,7 +483,6 @@ function startDownload(dtype) {
             const filePath = "/downloads/" + encodeURIComponent(data.filename);
             downloadLink.innerText = "🎉 Save File";
             downloadHint.classList.add('hidden');
-            downloadLink.setAttribute('target', '_blank');
 
             downloadLink.href = filePath;
             downloadLink.classList.remove('hidden');
