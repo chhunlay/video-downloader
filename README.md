@@ -17,7 +17,7 @@ downloaded file directly.
 ## Setup
 
 ```
-cd web_application
+cd app
 python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -39,7 +39,7 @@ TikTok) and resolution, and download.
 2. Copy the token into a `.env` file:
 
    ```
-   cd web_application
+   cd app
    cp .env.example .env
    # then edit .env and paste your token in place of the placeholder
    ```
@@ -59,27 +59,26 @@ work once you provide real session cookies:
 1. Export cookies from a browser where you're logged into Instagram/
    Facebook, using an extension like *Get cookies.txt LOCALLY*
    (Netscape format).
-2. Save the exported file as `web_application/cookies.txt`.
+2. Save the exported file as `app/cookies.txt`.
 
 YouTube and TikTok links work without this.
 
 ## Building a standalone Windows app
 
-See [`web_application/BUILD_WINDOWS.md`](web_application/BUILD_WINDOWS.md)
-for turning the web app into a single double-clickable `.exe`
-(`desktop_app.py` + PyInstaller) - no Python install needed on the
-machine that runs it.
+See [`app/BUILD_WINDOWS.md`](app/BUILD_WINDOWS.md) for turning the web
+app into a single double-clickable `.exe` (`desktop_app.py` +
+PyInstaller) - no Python install needed on the machine that runs it.
 
 ## Project layout
 
 ```
-web_application/
-  app.py              Flask web app
-  telegram_bot.py      Telegram bot
-  downloader.py         Shared yt-dlp/ffmpeg download + re-encode logic
-  desktop_app.py        pywebview wrapper for the Windows build
-  templates/index.html  Web app UI
-tiktok_downloader.py, youtube_downloader.py, youtube_downloader_v2.py
-  Early standalone scripts, kept for reference - the web app and bot
-  above are the actively maintained way to use this.
+app/
+  app.py                 Flask web app
+  telegram_bot.py        Telegram bot
+  downloader.py          Shared yt-dlp/ffmpeg download + re-encode logic
+  desktop_app.py         pywebview wrapper for the Windows build
+  templates/index.html   Web app UI
+legacy/
+  tiktok_downloader.py, youtube_downloader.py, youtube_downloader_v2.py
+  Early standalone scripts, superseded by app/ - kept for reference.
 ```
