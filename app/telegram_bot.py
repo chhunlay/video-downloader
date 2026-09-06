@@ -34,7 +34,7 @@ from telegram.ext import (
     filters,
 )
 
-from downloader import download_media, download_percent
+from downloader import download_media, download_percent, get_available_resolutions, get_video_info
 
 load_dotenv()
 
@@ -99,11 +99,22 @@ def probe_video_dimensions(path: str):
 def pick_dtype(url: str) -> str:
     """TikTok links get the watermark-free path; everything else is a
     plain video download (audio-only isn't offered here - add a /audio
-    command later if that's wanted). This covers Instagram and Facebook
-    links too, though those only actually succeed if a real cookies.txt
-    is set up (see downloader.py's COOKIE_FILE) - both sites refuse
-    logged-out requests almost entirely, unlike TikTok's public links."""
+    command later if that's wanted). This covers Instagram, Facebook,
+    and X/Twitter links too, though IG/FB only actually succeed if a
+    real cookies.txt is set up (see downloader.py's COOKIE_FILE) - both
+    sites refuse logged-out requests almost entirely, unlike TikTok's
+    and X's public links."""
     return "tiktok" if "tiktok.com" in url.lower() else "video"
+
+
+def is_youtube(url: str) -> bool:
+    """True for youtube.com/youtu.be links - these get the full
+    per-video resolution picker (handle_message) instead of the
+    Low/HQ choice every other site gets, since YouTube is the one site
+    here that reliably exposes a real resolution ladder (144p-4K) to
+    choose from up front."""
+    url = url.lower()
+    return "youtube.com" in url or "youtu.be" in url
 
 
 PROGRESS_BAR_LEN = 12
@@ -180,6 +191,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     request_id = uuid.uuid4().hex[:10]
     PENDING_LINKS[request_id] = (text, dtype)
 
+    if dtype == "video" and is_youtube(text):
+        await show_resolution_picker(update.message, text, request_id)
+        return
+
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("🔽 Low", callback_data=f"q:fast:{request_id}"),
         InlineKeyboardButton("🔼 HQ", callback_data=f"q:full:{request_id}"),
@@ -189,6 +204,68 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # short, real label instead of trying to hide it (an empty/invisible
     # one still renders as a bubble, just a blank-looking one).
     await update.message.reply_text("Choose the option", reply_markup=keyboard)
+
+
+async def show_resolution_picker(reply_to_message, url: str, request_id: str) -> None:
+    """
+    YouTube-only: replaces the usual Low/HQ choice with a button for
+    every resolution the video actually has (144p up to whatever its
+    real ceiling is, e.g. 4K) - YouTube is the one site here that
+    reliably exposes a full resolution ladder up front, unlike TikTok/
+    X/IG/FB, so it's worth letting the user pick precisely instead of
+    just a coarse low/high split.
+    """
+    status_msg = await reply_to_message.reply_text("🎬 Checking available resolutions...")
+
+    try:
+        # get_video_info() makes a real network request (metadata-only,
+        # no download) - run off the event loop so it can't block other
+        # chats, same reasoning as the download itself further down.
+        info = await asyncio.to_thread(get_video_info, url)
+        resolutions = get_available_resolutions(info)
+    except Exception as e:
+        logger.exception("Failed to fetch resolutions for %s", url)
+        PENDING_LINKS.pop(request_id, None)
+        await status_msg.edit_text(f"❌ Couldn't check this video: {e}")
+        return
+
+    # resolutions is [] when the site/extractor exposes no height info
+    # at all (rare) - the loop below then contributes no buttons, and
+    # the "Best available" button added after it is still there as the
+    # only option.
+    buttons = [
+        InlineKeyboardButton(f"{h}p", callback_data=f"r:{h}:{request_id}")
+        for h in resolutions
+    ]
+    buttons.append(InlineKeyboardButton("⭐ Best available", callback_data=f"r:best:{request_id}"))
+    # 3 per row keeps a full 144p-4K ladder (8 heights + Best = 9
+    # buttons) to a compact 3x3 grid instead of one long column.
+    rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
+
+    note = (
+        "⚠️ Only low quality is available for this video right now "
+        "(an active YouTube restriction, not something this bot controls).\n\n"
+        if len(resolutions) <= 1
+        else ""
+    )
+    await status_msg.edit_text(
+        f"{note}Choose the option", reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+
+async def handle_resolution_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    _, height, request_id = query.data.split(":", 2)
+    entry = PENDING_LINKS.pop(request_id, None)
+    if entry is None:
+        await query.edit_message_text("This request has expired - send the link again.")
+        return
+    text, dtype = entry
+    resolution = None if height == "best" else height
+
+    await run_download_and_send(update, context, query.message, text, dtype, resolution)
 
 
 async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -206,10 +283,17 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
     text, dtype = entry
     resolution = FAST_QUALITY_MAX_HEIGHT if quality == "fast" else None
 
-    status_msg = query.message
-    # reply_markup=None explicitly clears the Fast/Full buttons - editing
-    # a message's text alone leaves whatever inline keyboard it already
-    # had attached, so without this they'd stay visible (and clickable,
+    await run_download_and_send(update, context, query.message, text, dtype, resolution)
+
+
+async def run_download_and_send(update, context, status_msg, text, dtype, resolution) -> None:
+    """Shared by both the Low/HQ flow (handle_quality_choice) and the
+    YouTube resolution picker (handle_resolution_choice) - everything
+    after "a quality/resolution has been chosen" is identical either
+    way, just with a different `resolution` value."""
+    # reply_markup=None explicitly clears whichever buttons led here -
+    # editing a message's text alone leaves its existing inline keyboard
+    # attached, so without this they'd stay visible (and clickable,
     # pointlessly) through the whole download.
     await status_msg.edit_text(f"⬇️ Downloading  {render_bar(0)}  0%", reply_markup=None)
 
@@ -316,6 +400,7 @@ def main() -> None:
     application = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(handle_quality_choice, pattern=r"^q:"))
+    application.add_handler(CallbackQueryHandler(handle_resolution_choice, pattern=r"^r:"))
 
     logger.info("Bot starting (polling)...")
     application.run_polling()
