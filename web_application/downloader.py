@@ -294,7 +294,25 @@ def _already_social_safe(path):
         return False
 
 
-def normalize_for_social(path, progress_hook=None):
+def _get_height(path):
+    """Best-effort source video height in pixels, or None if ffprobe
+    can't tell. Used by normalize_for_social()'s max_height option to
+    decide whether downscaling is actually needed."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=height",
+                "-of", "default=noprint_wrappers=1:nokey=1", path,
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        return int(result.stdout.strip())
+    except Exception:
+        return None
+
+
+def normalize_for_social(path, progress_hook=None, max_height=None):
     """
     Makes the video at `path` safe to post on Instagram/TikTok/Facebook
     without their own upload pipeline choking on it - constant frame
@@ -334,11 +352,27 @@ def normalize_for_social(path, progress_hook=None):
     longer than the original download on a long video, and a caller
     with no visibility into that otherwise looks stuck.
 
+    `max_height`, if given, downscales video taller than that (e.g.
+    "480") during the re-encode - unlike `download_media`'s own
+    `resolution` cap (which only affects yt-dlp's format *selection*
+    and does nothing for TikTok, whose format string has no height
+    filter at all), this applies regardless of source or platform,
+    since it runs after the file already exists. It exists for testing
+    on a slow connection, not normal use: a smaller file uploads
+    proportionally faster on a bandwidth-limited link. It forces the
+    full re-encode path even for an otherwise-already-safe source,
+    since downscaling requires decoding and re-encoding regardless.
+
     Best-effort: if ffmpeg fails or isn't installed, the original file
     is left untouched rather than failing the whole download over what
     is otherwise a perfectly usable file.
     """
-    if _already_social_safe(path):
+    needs_downscale = False
+    if max_height:
+        height = _get_height(path)
+        needs_downscale = height is not None and height > int(max_height)
+
+    if _already_social_safe(path) and not needs_downscale:
         tmp_path = path + ".faststart.mp4"
         try:
             result = subprocess.run(
@@ -361,11 +395,16 @@ def normalize_for_social(path, progress_hook=None):
     duration = _get_duration_seconds(path)
     tmp_path = path + ".normalized.mp4"
 
+    scale_args = (
+        ["-vf", f"scale=-2:'min(ih,{int(max_height)})'"] if needs_downscale else []
+    )
+
     try:
         process = subprocess.Popen(
             [
                 "ffmpeg", "-y", "-i", path,
                 "-r", fps, "-vsync", "cfr",
+                *scale_args,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k",
@@ -584,6 +623,10 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     # of its own post-processing), so the web UI is already showing its
     # "processing" state while this re-encode runs.
     if dtype in ("video", "tiktok") and os.path.exists(final_path):
-        normalize_for_social(final_path, progress_hook=progress_hook)
+        # `resolution` only affects yt-dlp's format *selection* above,
+        # which does nothing for TikTok (no height filter in its format
+        # string) - passing it here too makes it a real cap regardless
+        # of platform, since this runs after the file already exists.
+        normalize_for_social(final_path, progress_hook=progress_hook, max_height=resolution)
 
     return final_path
