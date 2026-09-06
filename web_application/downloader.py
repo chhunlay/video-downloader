@@ -8,6 +8,7 @@ between two separate copies.
 
 import os
 import re
+import subprocess
 import time
 
 import requests
@@ -74,9 +75,44 @@ def extract_info_with_fallback(ydl_opts, url, download):
         return extract_info_with_retry(ydl, url, download), fallback_opts
 
 
+# Instagram and Facebook, unlike TikTok's public share links, almost
+# always refuse to serve video to a logged-out request at all ("sent an
+# empty media response" / "Cannot parse data" from yt-dlp, even for
+# posts that are visible in a browser with no login). There's no
+# watermark-stripping trick that gets around this the way there is for
+# TikTok - the only fix is handing yt-dlp real session cookies. Export
+# them from a logged-in browser with an extension like "Get cookies.txt
+# LOCALLY" (Netscape format) and save the file as cookies.txt next to
+# this script. A single such file can hold cookies for multiple sites
+# at once, so the same file covers Instagram, Facebook, and YouTube
+# age/region-gated content together.
+COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+
+
+def _cookie_opts():
+    """{'cookiefile': COOKIE_FILE} if a real Netscape-format cookie file
+    is present, else {}. Guards against a cookies.txt that exists but
+    isn't actually a cookie export (yt-dlp raises a hard-to-read error
+    on a malformed file instead of just ignoring it)."""
+    if not os.path.isfile(COOKIE_FILE):
+        return {}
+    try:
+        with open(COOKIE_FILE, "r", errors="ignore") as f:
+            first_line = f.readline()
+    except OSError:
+        return {}
+    if "Netscape HTTP Cookie File" not in first_line and "HTTP Cookie File" not in first_line:
+        print(f"[cookies] {COOKIE_FILE} doesn't look like a Netscape cookie "
+              "export - ignoring it. Instagram/Facebook links will fail "
+              "without real cookies.")
+        return {}
+    return {"cookiefile": COOKIE_FILE}
+
+
 def get_video_info(url):
     """Metadata-only lookup (title, thumbnail, uploader, duration, ...)."""
-    info, _ = extract_info_with_fallback({'quiet': True, 'no_warnings': True}, url, download=False)
+    opts = {'quiet': True, 'no_warnings': True, **_cookie_opts()}
+    info, _ = extract_info_with_fallback(opts, url, download=False)
     return info
 
 
@@ -170,6 +206,209 @@ def make_square(image_path):
         print("Thumbnail processing error:", e)
 
 
+def download_percent(d):
+    """
+    Extracts an integer 0-100 percent from a yt-dlp progress-hook dict
+    for status == "downloading". Returns None if the total size isn't
+    known yet (e.g. the very start of the download, or a stream whose
+    length yt-dlp can't predict) - callers should just skip updating on
+    None rather than showing a misleading 0%.
+
+    Shared by app.py's SSE progress endpoint and telegram_bot.py's
+    message-editing progress so both report identically instead of two
+    slightly different copies of the same math drifting apart.
+    """
+    total = d.get('total_bytes') or d.get('total_bytes_estimate')
+    downloaded = d.get('downloaded_bytes', 0)
+    if not total:
+        return None
+    return int(downloaded / total * 100)
+
+
+def _get_source_fps(path):
+    """Best-effort read of the source video's frame rate (e.g.
+    "30000/1001") via ffprobe, so normalize_for_social() re-encodes at
+    the same nominal rate instead of guessing a fixed number. Falls
+    back to "30" if ffprobe is missing or can't tell (rare)."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=r_frame_rate",
+                "-of", "default=noprint_wrappers=1:nokey=1", path,
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        fps = result.stdout.strip()
+        return fps if fps and fps != "0/0" else "30"
+    except Exception:
+        return "30"
+
+
+def _get_duration_seconds(path):
+    """Best-effort source duration in seconds, used to turn ffmpeg's raw
+    out_time into a 0-100 percent for normalize_for_social()'s progress
+    reporting. Returns None if ffprobe can't tell (progress reporting is
+    then just skipped - the re-encode itself is unaffected)."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", path,
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        return None
+
+
+def _already_social_safe(path):
+    """
+    True if `path` is already constant-frame-rate H.264/AAC/yuv420p -
+    i.e. re-encoding it would only cost quality for no compatibility
+    gain, so normalize_for_social() should just fast-remux it instead.
+
+    In practice this is the exception, not the rule: YouTube and TikTok
+    both serve their best-quality streams as AV1 or HEVC, neither of
+    which most social apps' upload pipelines accept directly (that
+    mismatch was the original "slow/choppy upload" bug this whole
+    normalization step exists to fix) - so most downloads still need
+    the real re-encode below. This check exists for the formats that
+    *are* already safe (some lower-quality TikTok/YouTube renditions
+    are plain CFR H.264), so those don't pay a quality cost for
+    nothing.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,pix_fmt,r_frame_rate,avg_frame_rate",
+                "-of", "default=noprint_wrappers=1:nokey=1", path,
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        codec, pix_fmt, r_fps, avg_fps = result.stdout.split()
+        return codec == "h264" and pix_fmt == "yuv420p" and r_fps == avg_fps
+    except Exception:
+        return False
+
+
+def normalize_for_social(path, progress_hook=None):
+    """
+    Makes the video at `path` safe to post on Instagram/TikTok/Facebook
+    without their own upload pipeline choking on it - constant frame
+    rate (CFR), H.264/AAC, in an mp4 container with a fast-start moov
+    atom - re-encoding only if the source doesn't already qualify.
+
+    Two separate problems this addresses, both caused by yt-dlp's
+    video+audio merge only muxing streams together (-c copy, no
+    re-encode) rather than fixing them up:
+
+    1. VFR (variable frame rate) - common on YouTube's adaptive streams
+       and on re-encoded TikTok content. Every major social platform
+       re-transcodes whatever you post into its own delivery format
+       server-side, and those transcoders assume constant frame rate:
+       fed a VFR file, they drop/duplicate frames, which is what shows
+       up as choppy/stuttery playback in the posted result even though
+       the file played back smoothly on-device before uploading.
+    2. Codec - YouTube and TikTok's best-quality streams are typically
+       AV1 or HEVC, not H.264. Most social apps' upload pipelines only
+       handle H.264 well; handed anything else, the app does its own
+       (slow, sometimes janky) client-side transcode before it'll even
+       accept the upload - this was the original "upload is slow"
+       complaint that led to this whole function existing.
+
+    If the source is already CFR H.264/AAC/yuv420p (checked by
+    _already_social_safe()), neither problem applies, so this just
+    fast-remuxes it (+faststart only, no re-encode - zero quality
+    loss) instead of needlessly recompressing an already-fine file.
+    Otherwise it does the full re-encode, which is unavoidably lossy
+    to some degree (video has to be decoded and recompressed to change
+    codec/frame timing at all) - CRF 18 keeps that loss close to
+    visually unnoticeable at the cost of a larger file than CRF 20 was.
+
+    If given, `progress_hook` receives {"status": "normalizing",
+    "percent": int} updates as it runs (parsed from ffmpeg's own
+    -progress stream) - a full re-encode, in particular, can take
+    longer than the original download on a long video, and a caller
+    with no visibility into that otherwise looks stuck.
+
+    Best-effort: if ffmpeg fails or isn't installed, the original file
+    is left untouched rather than failing the whole download over what
+    is otherwise a perfectly usable file.
+    """
+    if _already_social_safe(path):
+        tmp_path = path + ".faststart.mp4"
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", tmp_path],
+                capture_output=True, timeout=120,
+            )
+            if result.returncode == 0 and os.path.exists(tmp_path):
+                os.replace(tmp_path, path)
+            elif os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception as e:
+            print("Fast-start remux failed, keeping original file:", e)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        if progress_hook:
+            progress_hook({"status": "normalizing", "percent": 100})
+        return
+
+    fps = _get_source_fps(path)
+    duration = _get_duration_seconds(path)
+    tmp_path = path + ".normalized.mp4"
+
+    try:
+        process = subprocess.Popen(
+            [
+                "ffmpeg", "-y", "-i", path,
+                "-r", fps, "-vsync", "cfr",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
+                "-progress", "pipe:1", "-nostats",
+                tmp_path,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        if progress_hook and duration:
+            last_percent = -1
+            for line in process.stdout:
+                if not line.startswith("out_time_ms="):
+                    continue
+                try:
+                    out_time_ms = int(line.strip().split("=", 1)[1])
+                except ValueError:
+                    continue
+                percent = min(99, int(out_time_ms / 1_000_000 / duration * 100))
+                if percent != last_percent:
+                    last_percent = percent
+                    progress_hook({"status": "normalizing", "percent": percent})
+
+        _, stderr = process.communicate(timeout=600)
+
+        if process.returncode == 0 and os.path.exists(tmp_path):
+            os.replace(tmp_path, path)
+            if progress_hook:
+                progress_hook({"status": "normalizing", "percent": 100})
+        else:
+            print(
+                "Social-media normalization failed, keeping original file:",
+                (stderr or "")[-500:],
+            )
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+    except Exception as e:
+        print("Social-media normalization failed, keeping original file:", e)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     """
     Downloads a video ("video"), audio ("audio"), or watermark-free
@@ -207,6 +446,7 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
         'outtmpl': os.path.join(out_dir, '%(title).80s.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
+        **_cookie_opts(),
     }
     if progress_hook:
         ydl_opts['progress_hooks'] = [progress_hook]
@@ -337,5 +577,13 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
 
     if thumb_path and os.path.exists(thumb_path):
         os.remove(thumb_path)
+
+    # ================= NORMALIZE FOR SOCIAL (video/tiktok only) =========
+    # yt-dlp's own "finished" progress hook already fired by this point
+    # (it fires right after the download, before this function does any
+    # of its own post-processing), so the web UI is already showing its
+    # "processing" state while this re-encode runs.
+    if dtype in ("video", "tiktok") and os.path.exists(final_path):
+        normalize_for_social(final_path, progress_hook=progress_hook)
 
     return final_path

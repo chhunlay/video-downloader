@@ -4,7 +4,7 @@ import threading
 import time
 import json
 
-from downloader import download_media, get_video_info, get_available_resolutions
+from downloader import download_media, get_video_info, get_available_resolutions, download_percent
 
 app = Flask(__name__)
 
@@ -20,15 +20,22 @@ progress_data = {
 
 def progress_hook(d):
     if d['status'] == 'downloading':
-        total = d.get('total_bytes') or d.get('total_bytes_estimate')
-        downloaded = d.get('downloaded_bytes', 0)
-        if total:
-            progress_data["percent"] = int(downloaded / total * 100)
+        percent = download_percent(d)
+        if percent is not None:
+            progress_data["percent"] = percent
             progress_data["status"] = "downloading"
 
     elif d['status'] == 'finished':
         progress_data["status"] = "processing"
         progress_data["percent"] = 100
+
+    elif d['status'] == 'normalizing':
+        # The post-download CFR re-encode (see downloader.py) - on a
+        # longer video this can take longer than the download itself,
+        # so it gets its own visible progress instead of the UI just
+        # sitting at "processing" with no feedback.
+        progress_data["status"] = "optimizing for social media"
+        progress_data["percent"] = d.get("percent", progress_data["percent"])
 
     elif d['status'] == 'error':
         progress_data["status"] = "error"
