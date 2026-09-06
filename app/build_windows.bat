@@ -1,6 +1,6 @@
 @echo off
 REM Builds VideoDownloader.exe from desktop_app.py.
-REM Run this ON WINDOWS, inside this web_application folder, with a
+REM Run this ON WINDOWS, inside this app folder, with a
 REM Python virtual environment activated that has requirements.txt
 REM installed (pip install -r requirements.txt).
 

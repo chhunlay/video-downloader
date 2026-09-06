@@ -19,8 +19,7 @@ cross-compile between operating systems.
    `bin` folder to your PATH — required for audio extraction and the
    TikTok thumbnail-embed step. Without it, video downloads still work;
    audio downloads will error.
-3. Open a terminal (PowerShell or cmd) in this `web_application` folder
-   and run:
+3. Open a terminal (PowerShell or cmd) in this `app` folder and run:
 
    ```
    python -m venv .venv

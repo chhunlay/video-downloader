@@ -1,0 +1,16 @@
+# downloaded media, personal session cookies, and secrets - never commit these
+downloads/
+cookies.txt
+.env
+# not actually needed to un-ignore anything above (only the exact names
+# "cookies.txt"/".env" are ignored, not a wildcard) - kept explicit so the
+# safe template stays obviously safe to commit even if that ever changes
+!.env.example
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+__pycache__/
+*.pyc
