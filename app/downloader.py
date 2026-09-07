@@ -116,6 +116,23 @@ def get_video_info(url):
     return info
 
 
+def _is_video_format(f):
+    """
+    True if `f` is a real video format - i.e. has a height and isn't
+    explicitly flagged as no-video (vcodec == the string "none", used
+    for both audio-only formats and YouTube's mhtml storyboard/scrubbing
+    thumbnails, which otherwise have a real-looking but meaningless
+    "height").
+
+    Deliberately does NOT require vcodec to be a real codec string:
+    X/Twitter's progressive "http-*" formats have a genuine height
+    (and are real downloadable video) but leave vcodec unset (None)
+    entirely - excluding those on vcodec being falsy (an earlier bug
+    here) silently produced an empty resolution list for X links.
+    """
+    return bool(f.get("height")) and f.get("vcodec") != "none"
+
+
 def get_available_resolutions(info):
     """
     Returns the distinct video heights (e.g. [1080, 720, 480]) available
@@ -124,12 +141,82 @@ def get_available_resolutions(info):
     height info (e.g. audio-only content, or a site yt-dlp can't inspect
     formats for).
     """
-    heights = {
-        f["height"]
-        for f in info.get("formats", [])
-        if f.get("vcodec") not in (None, "none") and f.get("height")
-    }
+    heights = {f["height"] for f in info.get("formats", []) if _is_video_format(f)}
     return sorted(heights, reverse=True)
+
+
+def format_size(num_bytes):
+    """1234567 -> '1.2MB'; 1234567890 -> '1.2GB'. None in, None out."""
+    if not num_bytes:
+        return None
+    for unit in ("B", "KB", "MB", "GB"):
+        if num_bytes < 1024 or unit == "GB":
+            return f"{num_bytes:.0f}{unit}" if unit == "B" else f"{num_bytes:.1f}{unit}"
+        num_bytes /= 1024
+
+
+def get_resolutions_with_sizes(info):
+    """
+    Like get_available_resolutions(), but pairs each height with an
+    approximate download size string (e.g. "142.3MB"), or None if no
+    size could be estimated at all for that height.
+
+    Sizes are inherently approximate, for three reasons: (1) YouTube's
+    newer, higher-bitrate format variants often don't report a
+    filesize at all (a known yt-dlp/YouTube quirk - the older, lower-
+    bitrate variant at the same height usually does) - this picks
+    whichever candidate at that height has the *largest* known size,
+    both to fall back to a real number when the "best" variant lacks
+    one and because it's closer to what actually tends to get selected
+    at download time; (2) Instagram/Facebook's DASH formats often
+    report neither filesize nor filesize_approx at all - a bitrate
+    (tbr) x duration estimate is used as a last resort when both are
+    missing, and if even the duration isn't exposed (happens on some
+    IG reels), there's simply nothing left to estimate from and the
+    result is None; (3) this is the size of the raw downloaded
+    video+audio, before this app's own CFR re-encode step (see
+    normalize_for_social in this module) changes it further.
+
+    Returns a list of (height, size_str_or_None) tuples, highest first.
+    """
+    formats = info.get("formats", [])
+    duration = info.get("duration")
+
+    def real_size(f):
+        return f.get("filesize") or f.get("filesize_approx")
+
+    def estimated_size(f):
+        return int(f["tbr"] * 1000 / 8 * duration) if f.get("tbr") and duration else None
+
+    # Audio-only: no height at all (the real video-vs-not signal - see
+    # _is_video_format's docstring for why vcodec alone isn't reliable).
+    best_audio_size = max(
+        (real_size(f) for f in formats if not f.get("height") and real_size(f)),
+        default=0,
+    )
+
+    by_height = {}
+    for f in formats:
+        if not _is_video_format(f):
+            continue
+        # Prefer a real reported size over a bitrate-based guess even
+        # when comparing across different formats at the same height -
+        # a fabricated tbr estimate for one variant should never win
+        # out over an actual known size just because it's numerically
+        # bigger (tbr-based estimates tend to run high, since bitrate
+        # doesn't average out the way real segment sizes do).
+        entry = (1, real_size(f)) if real_size(f) else (0, estimated_size(f) or 0)
+        by_height.setdefault(f["height"], []).append(entry)
+
+    results = []
+    for height in sorted(by_height, reverse=True):
+        # Tuple comparison picks a real size over an estimated one
+        # regardless of magnitude (the leading 1/0 flag decides first),
+        # and the larger of same-kind candidates otherwise.
+        _, video_size = max(by_height[height])
+        total = (video_size + best_audio_size) if video_size else None
+        results.append((height, format_size(total)))
+    return results
 
 
 # Junk commonly appended to YouTube upload titles that hurts a music

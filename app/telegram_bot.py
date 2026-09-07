@@ -34,7 +34,13 @@ from telegram.ext import (
     filters,
 )
 
-from downloader import download_media, download_percent, get_available_resolutions, get_video_info
+from downloader import (
+    download_media,
+    download_percent,
+    format_size,
+    get_resolutions_with_sizes,
+    get_video_info,
+)
 
 load_dotenv()
 
@@ -195,15 +201,84 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await show_resolution_picker(update.message, text, request_id)
         return
 
+    # A quick placeholder first, same as the YouTube resolution picker -
+    # _estimate_low_hq_sizes() below makes a real network request, so
+    # showing nothing until it resolves would leave the chat looking
+    # unresponsive for that stretch.
+    status_msg = await update.message.reply_text("🎬 Checking file size...")
+    low_size, hq_size = await _estimate_low_hq_sizes(text, dtype)
+
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔽 Low", callback_data=f"q:fast:{request_id}"),
-        InlineKeyboardButton("🔼 HQ", callback_data=f"q:full:{request_id}"),
+        InlineKeyboardButton(
+            f"🔽 Low ({low_size})" if low_size else "🔽 Low",
+            callback_data=f"q:fast:{request_id}",
+        ),
+        InlineKeyboardButton(
+            f"🔼 HIGH ({hq_size})" if hq_size else "🔼 HIGH",
+            callback_data=f"q:full:{request_id}",
+        ),
     ]])
     # Telegram always attaches inline buttons to a real message bubble -
     # there's no way to have buttons with no bubble at all, so it gets a
     # short, real label instead of trying to hide it (an empty/invisible
     # one still renders as a bubble, just a blank-looking one).
-    await update.message.reply_text("Choose the option", reply_markup=keyboard)
+    await status_msg.edit_text("Choose the option", reply_markup=keyboard)
+
+
+async def _estimate_low_hq_sizes(url: str, dtype: str):
+    """
+    Returns (low_size_str, hq_size_str), either of which is None if it
+    couldn't be determined - the caller falls back to a plain "Low"/"HQ"
+    label with no size in that case rather than blocking the download
+    over what's just a nice-to-have.
+
+    For dtype == "video" (X/Twitter, IG, FB): "HQ" is the largest
+    available height's size, "Low" is the size at (or just under)
+    FAST_QUALITY_MAX_HEIGHT, or the smallest available height if the
+    video has nothing that low - these genuinely differ, since
+    download_media does apply that height cap for "video".
+
+    For dtype == "tiktok": both are the *same* single size, deliberately
+    - TikTok's own format selection ('best[format_id!=download]/best')
+    has no height filter to cap in the first place (see download_media),
+    so Low and HQ already produce the identical downloaded file for
+    TikTok. Showing two different numbers there would be actively
+    misleading, not just imprecise.
+    """
+    try:
+        info = await asyncio.to_thread(get_video_info, url)
+    except Exception:
+        return None, None
+
+    if dtype == "tiktok":
+        size = _estimate_tiktok_size(info)
+        return size, size
+
+    resolutions = get_resolutions_with_sizes(info)  # highest height first
+    if not resolutions:
+        return None, None
+
+    hq_size = resolutions[0][1]
+    cap = int(FAST_QUALITY_MAX_HEIGHT)
+    low_size = next((size for h, size in resolutions if h <= cap), resolutions[-1][1])
+    return low_size, hq_size
+
+
+def _estimate_tiktok_size(info):
+    """
+    Best-effort size of whatever download_media's TikTok format string
+    ('best[format_id!=download]/best') would actually pick: the
+    non-watermarked format ("download" is always TikTok's watermarked
+    stream's format_id - see download_media's own comment on this)
+    with the largest known size, since yt-dlp's "best" heuristic
+    generally tracks bitrate/quality too.
+    """
+    candidates = [
+        (f.get("filesize") or f.get("filesize_approx") or 0)
+        for f in info.get("formats", [])
+        if f.get("format_id") != "download"
+    ]
+    return format_size(max(candidates, default=0))
 
 
 async def show_resolution_picker(reply_to_message, url: str, request_id: str) -> None:
@@ -222,7 +297,7 @@ async def show_resolution_picker(reply_to_message, url: str, request_id: str) ->
         # no download) - run off the event loop so it can't block other
         # chats, same reasoning as the download itself further down.
         info = await asyncio.to_thread(get_video_info, url)
-        resolutions = get_available_resolutions(info)
+        resolutions = get_resolutions_with_sizes(info)
     except Exception as e:
         logger.exception("Failed to fetch resolutions for %s", url)
         PENDING_LINKS.pop(request_id, None)
@@ -232,10 +307,15 @@ async def show_resolution_picker(reply_to_message, url: str, request_id: str) ->
     # resolutions is [] when the site/extractor exposes no height info
     # at all (rare) - the loop below then contributes no buttons, and
     # the "Best available" button added after it is still there as the
-    # only option.
+    # only option. Sizes are approximate (see get_resolutions_with_sizes'
+    # own docstring) and missing entirely for some obscure formats, in
+    # which case the button just falls back to showing the height alone.
     buttons = [
-        InlineKeyboardButton(f"{h}p", callback_data=f"r:{h}:{request_id}")
-        for h in resolutions
+        InlineKeyboardButton(
+            f"{h}p ({size})" if size else f"{h}p",
+            callback_data=f"r:{h}:{request_id}",
+        )
+        for h, size in resolutions
     ]
     buttons.append(InlineKeyboardButton("⭐ Best available", callback_data=f"r:best:{request_id}"))
     # 3 per row keeps a full 144p-4K ladder (8 heights + Best = 9
