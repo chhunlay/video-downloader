@@ -196,11 +196,22 @@ function startDownload(dtype) {
             // less convenient but actually works consistently, so that's
             // what every platform gets now.
             const filePath = "/downloads/" + encodeURIComponent(data.filename);
-            downloadLink.innerText = "🎉 Save File";
             downloadHint.classList.add('hidden');
 
-            downloadLink.href = filePath;
-            downloadLink.classList.remove('hidden');
+            // Fire the browser download automatically - no click needed.
+            // The server deletes the file from downloads/ as soon as this
+            // request finishes serving it, so this fetch must be the only
+            // thing that ever requests this filePath; a plain `<a>` click
+            // would work too but a temporary, off-DOM anchor keeps it from
+            // lingering as a (now-dead) button in the UI.
+            const tempLink = document.createElement('a');
+            tempLink.href = filePath;
+            tempLink.download = data.filename;
+            document.body.appendChild(tempLink);
+            tempLink.click();
+            tempLink.remove();
+
+            statusText.innerText = "✅ Downloaded";
         }
 
         if (data.status.startsWith("error")) {
