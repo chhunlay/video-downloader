@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, Response, jsonify, send_from_directory
+from flask import Flask, render_template, request, Response, jsonify, send_from_directory, after_this_request
 import os
 import threading
 import time
@@ -97,6 +97,19 @@ def download_file(filename):
     # instead lands in the Files app with no direct path to the photo
     # library. Desktop/default behavior (a normal download) is unchanged.
     inline = request.args.get("inline") == "1"
+
+    @after_this_request
+    def cleanup(response):
+        # The browser download (or auto-download from the frontend) is
+        # the only consumer of this file - once it's been handed off,
+        # delete it from disk so completed downloads don't pile up
+        # forever in DOWNLOAD_DIR.
+        try:
+            os.remove(os.path.join(DOWNLOAD_DIR, filename))
+        except OSError:
+            pass
+        return response
+
     return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=not inline)
 
 
