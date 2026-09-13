@@ -3,6 +3,7 @@ import os
 import threading
 import time
 import json
+import subprocess
 
 from downloader import download_media, get_video_info, get_available_resolutions, download_percent
 
@@ -140,4 +141,11 @@ if __name__ == "__main__":
     # so other devices on the same LAN (e.g. a phone on the same WiFi)
     # can reach this by the Mac's local IP - fine for trusted home/office
     # networks, but note anyone else on that network can reach it too.
+
+    # Uncomment to expose this app over the internet via a Cloudflare
+    # Tunnel (requires `brew install cloudflared`). This runs a quick
+    # ephemeral tunnel and prints a random *.trycloudflare.com URL to
+    # the terminal - no Cloudflare account or DNS setup needed.
+    subprocess.Popen(["cloudflared", "tunnel", "--url", "http://localhost:5050"])
+
     app.run(host="0.0.0.0", debug=True, port=5050)
