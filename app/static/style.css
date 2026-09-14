@@ -106,6 +106,28 @@ body {
 .action-btn:hover { transform: translateY(-2px); }
 .action-btn:active { transform: translateY(0); }
 
+.res-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.125rem;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    color: var(--text-main);
+    padding: 0.625rem 0.5rem;
+    border-radius: 0.75rem;
+    text-align: center;
+    transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.res-card:hover { transform: translateY(-2px); }
+.res-card.selected {
+    border-color: rgba(129, 140, 248, 0.8);
+    background: rgba(99, 102, 241, 0.18);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+.res-card-label { font-weight: 600; font-size: 0.875rem; }
+.res-card-size { font-size: 0.6875rem; color: var(--text-muted); }
+
 .thumb-wrap {
     aspect-ratio: 3 / 4;
     max-height: 420px;

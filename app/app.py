@@ -5,7 +5,7 @@ import time
 import json
 import subprocess
 
-from downloader import download_media, get_video_info, get_available_resolutions, download_percent
+from downloader import download_media, get_video_info, get_resolutions_with_sizes, download_percent
 
 app = Flask(__name__)
 
@@ -126,7 +126,7 @@ def video_info():
             "thumbnail": info.get("thumbnail"),
             "uploader": info.get("uploader"),
             "duration": info.get("duration"),
-            "resolutions": get_available_resolutions(info),
+            "resolutions": get_resolutions_with_sizes(info),
         })
 
     except Exception as e:
