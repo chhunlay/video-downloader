@@ -89,9 +89,13 @@
                      brings the other options back. -->
                 <div id="resolutionPicker" class="hidden col-span-2">
                     <label class="block mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Resolution</label>
-                    <select id="resolutionSelect" class="url-input w-full py-2.5 px-3 rounded-xl outline-none">
-                        <option value="">Best available</option>
-                    </select>
+                    <!-- Hidden input keeps the selected value (read the
+                         same way the old <select> was: .value) while the
+                         cards below drive it via resCard/selectResolution -
+                         card grid reads better than a dropdown when there
+                         are only a handful of options. -->
+                    <input type="hidden" id="resolutionSelect" value="">
+                    <div id="resolutionCards" class="grid grid-cols-3 gap-2"></div>
                     <p id="resolutionLimitedNote" class="hidden text-xs text-amber-400 mt-1.5">
                         ⚠️ Only low quality is available for this video right now (an active site restriction, not something this app controls).
                     </p>
