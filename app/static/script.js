@@ -86,6 +86,7 @@ document.getElementById('url').addEventListener('input', () => {
                 document.getElementById('videoUploader').innerText = "By " + data.uploader;
 
                 const resolutionSelect = document.getElementById('resolutionSelect');
+                const resolutionCards = document.getElementById('resolutionCards');
                 const resolutionLimitedNote = document.getElementById('resolutionLimitedNote');
 
                 // Picker (and the Audio/TikTok buttons it hides while
@@ -97,18 +98,29 @@ document.getElementById('url').addEventListener('input', () => {
                 document.getElementById('videoBtn').classList.remove('hidden');
                 document.getElementById('audioBtn').classList.remove('hidden');
                 document.getElementById('tiktokBtn').classList.remove('hidden');
+                // Each entry is [height, sizeStr|null] - the picker shows
+                // both, but the resolution actually submitted is just the
+                // height (selectResolution's `value`).
                 currentResolutions = data.resolutions || [];
 
                 if (currentResolutions.length > 0) {
-                    resolutionSelect.innerHTML = '<option value="">Best available</option>' +
-                        currentResolutions.map(h => `<option value="${h}">${h}p</option>`).join('');
+                    // No standalone "Best" card - resolutions arrive
+                    // highest-first, so that first entry is selected by
+                    // default and amounts to the same thing.
+                    resolutionSelect.value = currentResolutions[0][0];
+                    resolutionCards.innerHTML = currentResolutions.map(([h, size], i) =>
+                        `<button type="button" class="res-card${i === 0 ? ' selected' : ''}" data-value="${h}" onclick="selectResolution('${h}')">` +
+                            `<span class="res-card-label">${h}p</span>` +
+                            (size ? `<span class="res-card-size">${size}</span>` : '') +
+                        `</button>`
+                    ).join('');
 
                     // A real, unrestricted video normally has several
                     // resolutions up to 720p/1080p+. Seeing only one or
                     // two options capped low is the signature of a site
                     // (most often YouTube) currently rate-limiting or
                     // bot-checking this app - not a picker bug.
-                    const maxRes = Math.max(...currentResolutions);
+                    const maxRes = Math.max(...currentResolutions.map(([h]) => h));
                     resolutionLimitedNote.classList.toggle('hidden', !(currentResolutions.length <= 1 || maxRes < 480));
                 }
             } else {
@@ -138,6 +150,16 @@ function handleVideoClick() {
     } else {
         startDownload('video');
     }
+}
+
+// Cards mirror a radio group: clicking one stores its value in the
+// hidden input (read by startDownload exactly like the old <select>
+// was) and toggles the "selected" style on/off across the set.
+function selectResolution(value) {
+    document.getElementById('resolutionSelect').value = value;
+    document.querySelectorAll('#resolutionCards .res-card').forEach(card => {
+        card.classList.toggle('selected', card.dataset.value === value);
+    });
 }
 
 function hideResolutionPicker() {
