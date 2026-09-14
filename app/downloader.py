@@ -237,6 +237,11 @@ def clean_title_for_search(title):
     return cleaned.strip()
 
 
+def _normalize_for_match(s):
+    """Lowercase, alnum-only - lets 'Don't Stop' match "dont stop"."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
 def get_itunes_cover_art(title):
     """
     Looks up `title` on iTunes' free public search API (no key required)
@@ -244,6 +249,16 @@ def get_itunes_cover_art(title):
     match, or None if nothing reasonable was found (any error is treated
     the same as "no match" - this is a nice-to-have, never worth failing
     the whole download over).
+
+    iTunes' search always returns its closest guess even when nothing
+    actually matches (e.g. a video titled "Interstellar Main Theme -
+    Extra Extended - Soundtrack by Hans Zimmer" can come back matched to
+    an unrelated "First Step" track just because "Hans Zimmer" appears
+    in both) - accepting that blindly means embedding the wrong cover
+    art instead of falling back to the video's own thumbnail. So the
+    match is only trusted when the returned track's name actually shows
+    up in the searched title; otherwise this returns None like a real
+    "no match" would, and the caller falls back to the video thumbnail.
     """
     query = clean_title_for_search(title)
     if not query:
@@ -258,6 +273,10 @@ def get_itunes_cover_art(title):
         response.raise_for_status()
         results = response.json().get("results", [])
         if not results:
+            return None
+
+        track_name = _normalize_for_match(results[0].get("trackName"))
+        if not track_name or track_name not in _normalize_for_match(query):
             return None
 
         # iTunes serves artwork at a small fixed size by default (e.g.
