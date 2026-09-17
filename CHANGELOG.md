@@ -5,6 +5,15 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.8.0] - 2026-09-14
+### Changed
+- Resolution picker redesigned as a tappable card grid instead of a
+  dropdown `<select>`, each card showing its approximate file size
+  (wires up the existing `get_resolutions_with_sizes` helper, which the
+  `/info` endpoint wasn't using yet).
+- Removed the standalone "Best available" card; the highest resolution
+  is now pre-selected by default instead.
+
 ## [0.7.0] - 2026-09-07
 ### Added
 - YouTube resolution picker and a custom Telegram bot icon.
