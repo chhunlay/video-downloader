@@ -5,6 +5,12 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.8.2] - 2026-10-11
+### Added
+- README header with a centered title, tagline, badges (version,
+  Python, Flask, yt-dlp, python-telegram-bot, FFmpeg, last commit) and
+  quick links to each section.
+
 ## [0.8.1] - 2026-10-11
 ### Changed
 - Cleaned up code comments: short and current, with long history notes
