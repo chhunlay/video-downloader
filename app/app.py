@@ -1,17 +1,21 @@
-from flask import Flask, render_template, request, Response, jsonify, send_from_directory, after_this_request
+"""Flask web front-end for downloader.py."""
+
+import json
 import os
+import subprocess
 import threading
 import time
-import json
-import subprocess
 
-from downloader import download_media, get_video_info, get_resolutions_with_sizes, download_percent
+from flask import Flask, Response, after_this_request, jsonify, render_template, request, send_from_directory
+
+from downloader import download_media, download_percent, get_resolutions_with_sizes, get_video_info
 
 app = Flask(__name__)
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# Progress of the current download, streamed to the page by /progress
 progress_data = {
     "percent": 0,
     "status": "idle",
@@ -20,6 +24,12 @@ progress_data = {
 
 
 def progress_hook(d):
+    """
+    Copies download progress into progress_data.
+
+    Parameters:
+    d (dict): yt-dlp progress dict, or a "normalizing" update.
+    """
     if d['status'] == 'downloading':
         percent = download_percent(d)
         if percent is not None:
@@ -31,10 +41,6 @@ def progress_hook(d):
         progress_data["percent"] = 100
 
     elif d['status'] == 'normalizing':
-        # The post-download CFR re-encode (see downloader.py) - on a
-        # longer video this can take longer than the download itself,
-        # so it gets its own visible progress instead of the UI just
-        # sitting at "processing" with no feedback.
         progress_data["status"] = "optimizing for social media"
         progress_data["percent"] = d.get("percent", progress_data["percent"])
 
@@ -43,9 +49,15 @@ def progress_hook(d):
 
 
 def download_task(url, dtype, resolution=None):
-    progress_data["percent"] = 0
-    progress_data["status"] = "starting"
-    progress_data["filename"] = ""
+    """
+    Runs one download in the background, reporting through progress_data.
+
+    Parameters:
+    url (str): The video link.
+    dtype (str): "video", "audio" or "tiktok".
+    resolution (str/None): Max height; empty or None means best.
+    """
+    progress_data.update(percent=0, status="starting", filename="")
 
     try:
         final_path = download_media(
@@ -60,14 +72,26 @@ def download_task(url, dtype, resolution=None):
 
 @app.route("/")
 def index():
+    """
+    Serves the main page.
+
+    Returns:
+    str: The rendered index.html.
+    """
     return render_template("index.html")
 
 
 @app.route("/download", methods=["POST"])
 def download():
+    """
+    Starts a download in a background thread.
+
+    Returns:
+    Response: {"started": true}.
+    """
     url = request.form.get("url")
     dtype = request.form.get("type")
-    resolution = request.form.get("resolution")  # e.g. "720", or absent for best available
+    resolution = request.form.get("resolution")  # e.g. "720"; empty means best
 
     thread = threading.Thread(target=download_task, args=(url, dtype, resolution))
     thread.start()
@@ -77,11 +101,17 @@ def download():
 
 @app.route("/progress")
 def progress():
+    """
+    Streams progress_data as server-sent events until the download ends.
+
+    Returns:
+    Response: A text/event-stream response.
+    """
     def event_stream():
         while True:
             yield f"data:{json.dumps(progress_data)}\n\n"
 
-            if progress_data["status"] in ("done",) or progress_data["status"].startswith("error"):
+            if progress_data["status"] == "done" or progress_data["status"].startswith("error"):
                 break
 
             time.sleep(0.5)
@@ -91,20 +121,20 @@ def progress():
 
 @app.route("/downloads/<path:filename>")
 def download_file(filename):
-    # ?inline=1 serves the file for in-browser playback instead of
-    # forcing a raw file download. On iOS Safari specifically, playing
-    # a video inline gives access to the native Share sheet's "Save
-    # Video" action, which saves straight to Photos - a forced download
-    # instead lands in the Files app with no direct path to the photo
-    # library. Desktop/default behavior (a normal download) is unchanged.
+    """
+    Sends a finished download, then deletes it from disk.
+
+    Parameters:
+    filename (str): Name of the file in DOWNLOAD_DIR.
+
+    Returns:
+    Response: The file; ?inline=1 plays it in the browser instead of downloading.
+    """
     inline = request.args.get("inline") == "1"
 
     @after_this_request
     def cleanup(response):
-        # The browser download (or auto-download from the frontend) is
-        # the only consumer of this file - once it's been handed off,
-        # delete it from disk so completed downloads don't pile up
-        # forever in DOWNLOAD_DIR.
+        # Each file is served once, then deleted so downloads/ doesn't fill up
         try:
             os.remove(os.path.join(DOWNLOAD_DIR, filename))
         except OSError:
@@ -116,6 +146,12 @@ def download_file(filename):
 
 @app.route("/info", methods=["POST"])
 def video_info():
+    """
+    Returns a video's preview details and available resolutions.
+
+    Returns:
+    Response: JSON with title, thumbnail, uploader, duration and resolutions, or {"error": ...}.
+    """
     url = request.form.get("url")
 
     try:
@@ -134,18 +170,9 @@ def video_info():
 
 
 if __name__ == "__main__":
-    # Port 5000 collides with macOS AirPlay Receiver, which grabs it by
-    # default and returns 403 to browser requests before Flask ever sees
-    # them - use 5050 instead to avoid the conflict.
-    # host="0.0.0.0" binds every network interface, not just localhost,
-    # so other devices on the same LAN (e.g. a phone on the same WiFi)
-    # can reach this by the Mac's local IP - fine for trusted home/office
-    # networks, but note anyone else on that network can reach it too.
-
-    # Uncomment to expose this app over the internet via a Cloudflare
-    # Tunnel (requires `brew install cloudflared`). This runs a quick
-    # ephemeral tunnel and prints a random *.trycloudflare.com URL to
-    # the terminal - no Cloudflare account or DNS setup needed.
+    # Public URL via a temporary Cloudflare Tunnel (needs `brew install cloudflared`);
+    # it prints a random *.trycloudflare.com address
     subprocess.Popen(["cloudflared", "tunnel", "--url", "http://localhost:5050"])
 
+    # Port 5050 because macOS AirPlay takes 5000; 0.0.0.0 allows other devices on the LAN
     app.run(host="0.0.0.0", debug=True, port=5050)

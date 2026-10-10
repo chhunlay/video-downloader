@@ -37,11 +37,7 @@
             <input id="url" type="text" placeholder="Paste a YouTube or TikTok link…"
                    autocomplete="off" autocorrect="off" spellcheck="false"
                    class="url-input w-full py-3 pl-4 pr-10 rounded-xl outline-none transition-all">
-            <!-- A wrapper handles vertical centering (inset-y-0 + flex) so
-                 the spinning SVG only ever needs "animate-spin" (a bare
-                 rotate). Centering it directly on the SVG via -translate-y-1/2
-                 fought with animate-spin's own transform each frame,
-                 making the icon visibly drift up/down as it spun. -->
+            <!-- Centered by the wrapper: a translate on the SVG would fight animate-spin -->
             <div class="absolute right-3 inset-y-0 flex items-center pointer-events-none">
                 <svg id="loadingSpinner" class="animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -80,20 +76,10 @@
                     🎵 Audio
                 </button>
 
-                <!-- Resolution Picker - hidden until "Video" is clicked
-                     above, and only when the site exposes resolution
-                     info at all (not shown for TikTok, whose format
-                     selection already picks a specific stream). While
-                     it's open, Audio/TikTok hide too so the choice is
-                     just "pick a resolution, then Download" - Cancel
-                     brings the other options back. -->
+                <!-- Resolution Picker: opens from "Video" and replaces the other buttons until Cancel -->
                 <div id="resolutionPicker" class="hidden col-span-2">
                     <label class="block mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Resolution</label>
-                    <!-- Hidden input keeps the selected value (read the
-                         same way the old <select> was: .value) while the
-                         cards below drive it via resCard/selectResolution -
-                         card grid reads better than a dropdown when there
-                         are only a handful of options. -->
+                    <!-- Holds the chosen height; set by selectResolution() -->
                     <input type="hidden" id="resolutionSelect" value="">
                     <div id="resolutionCards" class="grid grid-cols-3 gap-2"></div>
                     <p id="resolutionLimitedNote" class="hidden text-xs text-amber-400 mt-1.5">
@@ -129,12 +115,7 @@
             </div>
         </div>
 
-        <!-- Download Link - deliberately no target="_blank": for a large
-             file (a full YouTube video can be 100s of MB, unlike a small
-             TikTok clip) opening a new tab just shows a blank/loading tab
-             for a long time with no visible progress, which reads as
-             "nothing happened" even though it may be downloading in the
-             background. Same-tab keeps the app visible while it downloads. -->
+        <!-- Download Link: same tab on purpose, so the app stays visible during large downloads -->
         <a id="downloadLink" href="#"
            class="file-link hidden fade-up mt-5 w-full flex items-center justify-center gap-2 font-bold py-3 px-4 rounded-xl transition-colors">
             🎉 Save File

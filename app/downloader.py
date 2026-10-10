@@ -1,10 +1,4 @@
-"""
-Shared yt-dlp download logic used by both the web app (app.py) and the
-Telegram bot (telegram_bot.py) - one implementation, so fixes (TikTok
-no-watermark format selection, retries for TikTok's transient scraping
-errors, and correct on-disk filenames) apply to both instead of drifting
-between two separate copies.
-"""
+"""Shared yt-dlp download logic for the web app (app.py) and the Telegram bot."""
 
 import os
 import re
@@ -15,10 +9,7 @@ import requests
 import yt_dlp
 from PIL import Image
 
-# TikTok's anti-scraping page intermittently returns a broken page to
-# yt-dlp (e.g. "Unable to extract universal data for rehydration") even
-# for videos that are perfectly available a moment later - retry a few
-# times before treating it as a real failure.
+# TikTok's scraper protection sometimes fails a request that works seconds later
 TRANSIENT_ERROR_HINTS = (
     "unable to extract universal data for rehydration",
     "unexpected response from webpage request",
@@ -26,41 +17,85 @@ TRANSIENT_ERROR_HINTS = (
     "status code 100001",
 )
 
+# YouTube asks for sign-in on its web client; the Android client still works,
+# but only at ~240p, so it is used as a fallback only
+YOUTUBE_SIGN_IN_HINT = "sign in to confirm"
+
+# Netscape-format cookies for Instagram/Facebook/age-gated YouTube
+# (export with a browser extension like "Get cookies.txt LOCALLY")
+COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+
+# TikTok always serves its watermarked stream under this format id
+TIKTOK_WATERMARK_FORMAT_ID = "download"
+
+# Bracketed junk in YouTube titles ("[Official Video]", "(Lyrics)") that hurts iTunes matching
+_TITLE_JUNK_RE = re.compile(
+    r"""[\[(][^\])]*
+        (?:official|lyric|lyrics|audio|video|mv|hd|hq|4k|remaster\w*|
+           visualiz\w*|explicit)
+        [^\])]*[\])]
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+# ---------- URL helpers ----------
+
+def is_tiktok(url):
+    """
+    Checks whether a link points to TikTok.
+
+    Parameters:
+    url (str): The link to check.
+
+    Returns:
+    bool: True for tiktok.com links.
+    """
+    return "tiktok.com" in url.lower()
+
+
+# ---------- yt-dlp ----------
 
 def extract_info_with_retry(ydl, url, download, attempts=5, delay=3):
-    last_error = None
+    """
+    Runs ydl.extract_info, retrying TikTok's transient scraping errors.
+
+    Parameters:
+    ydl (yt_dlp.YoutubeDL): The downloader to use.
+    url (str): The video link.
+    download (bool): True to download, False for metadata only.
+    attempts (int): Maximum number of tries.
+    delay (int/float): Seconds to wait between tries.
+
+    Returns:
+    dict: yt-dlp's info dict.
+
+    Raises:
+    yt_dlp.utils.DownloadError: On a non-transient error, or after the last try.
+    """
     for attempt in range(1, attempts + 1):
         try:
             return ydl.extract_info(url, download=download)
         except yt_dlp.utils.DownloadError as e:
-            last_error = e
             message = str(e).lower()
             is_transient = any(hint in message for hint in TRANSIENT_ERROR_HINTS)
             if not is_transient or attempt == attempts:
                 raise
             time.sleep(delay)
-    raise last_error
-
-
-# YouTube increasingly demands proof of a real logged-in browser session
-# ("Sign in to confirm you're not a bot") for its normal ("web") client,
-# even with no unusual request volume. There's no clean bypass for that -
-# it's a server-side identity check, not a client-side quirk. What *does*
-# still get through without any login is pretending to be the YouTube
-# Android app instead of a browser - at a real cost: YouTube's SABR
-# streaming restriction limits the Android client to a single legacy
-# ~240p format, nothing higher, when unauthenticated. So: try the normal
-# (full-quality) path first, and only fall back to the low-quality
-# Android path if YouTube specifically demands sign-in.
-YOUTUBE_SIGN_IN_HINT = "sign in to confirm"
 
 
 def extract_info_with_fallback(ydl_opts, url, download):
     """
-    Returns (info, effective_opts) - effective_opts is ydl_opts as
-    actually used (possibly with the Android-client fallback merged in),
-    which callers that need prepare_filename() must reuse to build a
-    YoutubeDL with matching settings (outtmpl, etc.).
+    Runs extract_info, retrying with YouTube's Android client if sign-in is required.
+
+    Parameters:
+    ydl_opts (dict): yt-dlp options.
+    url (str): The video link.
+    download (bool): True to download, False for metadata only.
+
+    Returns:
+    tuple: (info dict, the options actually used). Reuse those options for
+    prepare_filename() so the filename matches.
     """
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -75,25 +110,13 @@ def extract_info_with_fallback(ydl_opts, url, download):
         return extract_info_with_retry(ydl, url, download), fallback_opts
 
 
-# Instagram and Facebook, unlike TikTok's public share links, almost
-# always refuse to serve video to a logged-out request at all ("sent an
-# empty media response" / "Cannot parse data" from yt-dlp, even for
-# posts that are visible in a browser with no login). There's no
-# watermark-stripping trick that gets around this the way there is for
-# TikTok - the only fix is handing yt-dlp real session cookies. Export
-# them from a logged-in browser with an extension like "Get cookies.txt
-# LOCALLY" (Netscape format) and save the file as cookies.txt next to
-# this script. A single such file can hold cookies for multiple sites
-# at once, so the same file covers Instagram, Facebook, and YouTube
-# age/region-gated content together.
-COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
-
-
 def _cookie_opts():
-    """{'cookiefile': COOKIE_FILE} if a real Netscape-format cookie file
-    is present, else {}. Guards against a cookies.txt that exists but
-    isn't actually a cookie export (yt-dlp raises a hard-to-read error
-    on a malformed file instead of just ignoring it)."""
+    """
+    Builds the yt-dlp cookie option when cookies.txt is a real Netscape export.
+
+    Returns:
+    dict: {'cookiefile': COOKIE_FILE}, or {} if the file is missing or invalid.
+    """
     if not os.path.isfile(COOKIE_FILE):
         return {}
     try:
@@ -110,43 +133,76 @@ def _cookie_opts():
 
 
 def get_video_info(url):
-    """Metadata-only lookup (title, thumbnail, uploader, duration, ...)."""
+    """
+    Fetches a video's metadata without downloading it.
+
+    Parameters:
+    url (str): The video link.
+
+    Returns:
+    dict: yt-dlp's info dict (title, thumbnail, uploader, duration, formats, ...).
+    """
     opts = {'quiet': True, 'no_warnings': True, **_cookie_opts()}
     info, _ = extract_info_with_fallback(opts, url, download=False)
     return info
 
 
+def download_percent(d):
+    """
+    Converts a yt-dlp "downloading" progress dict to a percentage.
+
+    Parameters:
+    d (dict): yt-dlp progress dict.
+
+    Returns:
+    int/None: 0-100, or None while the total size is still unknown.
+    """
+    total = d.get('total_bytes') or d.get('total_bytes_estimate')
+    if not total:
+        return None
+    return int(d.get('downloaded_bytes', 0) / total * 100)
+
+
+# ---------- Formats and sizes ----------
+
 def _is_video_format(f):
     """
-    True if `f` is a real video format - i.e. has a height and isn't
-    explicitly flagged as no-video (vcodec == the string "none", used
-    for both audio-only formats and YouTube's mhtml storyboard/scrubbing
-    thumbnails, which otherwise have a real-looking but meaningless
-    "height").
+    Checks whether a format is real video.
 
-    Deliberately does NOT require vcodec to be a real codec string:
-    X/Twitter's progressive "http-*" formats have a genuine height
-    (and are real downloadable video) but leave vcodec unset (None)
-    entirely - excluding those on vcodec being falsy (an earlier bug
-    here) silently produced an empty resolution list for X links.
+    X/Twitter formats leave vcodec unset, so only the string "none" means no video.
+
+    Parameters:
+    f (dict): A yt-dlp format.
+
+    Returns:
+    bool: True if it has a height and isn't marked as no-video.
     """
     return bool(f.get("height")) and f.get("vcodec") != "none"
 
 
-def get_available_resolutions(info):
+def known_size(f):
     """
-    Returns the distinct video heights (e.g. [1080, 720, 480]) available
-    for this already-fetched info dict, highest first - for populating a
-    resolution picker. Empty list if the site/extractor exposes no
-    height info (e.g. audio-only content, or a site yt-dlp can't inspect
-    formats for).
+    Gets a format's reported size.
+
+    Parameters:
+    f (dict): A yt-dlp format.
+
+    Returns:
+    int/None: Size in bytes, or None if not reported.
     """
-    heights = {f["height"] for f in info.get("formats", []) if _is_video_format(f)}
-    return sorted(heights, reverse=True)
+    return f.get("filesize") or f.get("filesize_approx")
 
 
 def format_size(num_bytes):
-    """1234567 -> '1.2MB'; 1234567890 -> '1.2GB'. None in, None out."""
+    """
+    Formats a byte count for display.
+
+    Parameters:
+    num_bytes (int/float/None): Size in bytes.
+
+    Returns:
+    str/None: e.g. "1.2MB", or None for None or 0.
+    """
     if not num_bytes:
         return None
     for unit in ("B", "KB", "MB", "GB"):
@@ -155,43 +211,42 @@ def format_size(num_bytes):
         num_bytes /= 1024
 
 
+def get_available_resolutions(info):
+    """
+    Lists the distinct video heights a video offers.
+
+    Parameters:
+    info (dict): yt-dlp info dict.
+
+    Returns:
+    list: Heights, highest first, e.g. [1080, 720, 480].
+    """
+    heights = {f["height"] for f in info.get("formats", []) if _is_video_format(f)}
+    return sorted(heights, reverse=True)
+
+
 def get_resolutions_with_sizes(info):
     """
-    Like get_available_resolutions(), but pairs each height with an
-    approximate download size string (e.g. "142.3MB"), or None if no
-    size could be estimated at all for that height.
+    Lists each available height with its approximate download size.
 
-    Sizes are inherently approximate, for three reasons: (1) YouTube's
-    newer, higher-bitrate format variants often don't report a
-    filesize at all (a known yt-dlp/YouTube quirk - the older, lower-
-    bitrate variant at the same height usually does) - this picks
-    whichever candidate at that height has the *largest* known size,
-    both to fall back to a real number when the "best" variant lacks
-    one and because it's closer to what actually tends to get selected
-    at download time; (2) Instagram/Facebook's DASH formats often
-    report neither filesize nor filesize_approx at all - a bitrate
-    (tbr) x duration estimate is used as a last resort when both are
-    missing, and if even the duration isn't exposed (happens on some
-    IG reels), there's simply nothing left to estimate from and the
-    result is None; (3) this is the size of the raw downloaded
-    video+audio, before this app's own CFR re-encode step (see
-    normalize_for_social in this module) changes it further.
+    Per height, a reported size beats a bitrate x duration estimate, then the
+    larger wins. Sizes are taken before the re-encode step.
 
-    Returns a list of (height, size_str_or_None) tuples, highest first.
+    Parameters:
+    info (dict): yt-dlp info dict.
+
+    Returns:
+    list: (height, size string or None) tuples, highest first.
     """
     formats = info.get("formats", [])
     duration = info.get("duration")
 
-    def real_size(f):
-        return f.get("filesize") or f.get("filesize_approx")
-
     def estimated_size(f):
         return int(f["tbr"] * 1000 / 8 * duration) if f.get("tbr") and duration else None
 
-    # Audio-only: no height at all (the real video-vs-not signal - see
-    # _is_video_format's docstring for why vcodec alone isn't reliable).
+    # Audio-only formats have no height
     best_audio_size = max(
-        (real_size(f) for f in formats if not f.get("height") and real_size(f)),
+        (known_size(f) for f in formats if not f.get("height") and known_size(f)),
         default=0,
     )
 
@@ -199,66 +254,122 @@ def get_resolutions_with_sizes(info):
     for f in formats:
         if not _is_video_format(f):
             continue
-        # Prefer a real reported size over a bitrate-based guess even
-        # when comparing across different formats at the same height -
-        # a fabricated tbr estimate for one variant should never win
-        # out over an actual known size just because it's numerically
-        # bigger (tbr-based estimates tend to run high, since bitrate
-        # doesn't average out the way real segment sizes do).
-        entry = (1, real_size(f)) if real_size(f) else (0, estimated_size(f) or 0)
+        # (1, size) for reported sizes sorts above (0, estimate)
+        entry = (1, known_size(f)) if known_size(f) else (0, estimated_size(f) or 0)
         by_height.setdefault(f["height"], []).append(entry)
 
     results = []
     for height in sorted(by_height, reverse=True):
-        # Tuple comparison picks a real size over an estimated one
-        # regardless of magnitude (the leading 1/0 flag decides first),
-        # and the larger of same-kind candidates otherwise.
         _, video_size = max(by_height[height])
         total = (video_size + best_audio_size) if video_size else None
         results.append((height, format_size(total)))
     return results
 
 
-# Junk commonly appended to YouTube upload titles that hurts a music
-# search match - stripped before querying iTunes.
-_TITLE_JUNK_RE = re.compile(
-    r"""[\[(][^\])]*
-        (?:official|lyric|lyrics|audio|video|mv|hd|hq|4k|remaster\w*|
-           visualiz\w*|explicit)
-        [^\])]*[\])]
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
+def estimate_tiktok_size(info):
+    """
+    Estimates the size of the clip download_media("tiktok") picks.
 
+    Parameters:
+    info (dict): yt-dlp info dict for a TikTok video.
+
+    Returns:
+    str/None: Size of the largest non-watermarked format, e.g. "4.2MB".
+    """
+    candidates = [
+        known_size(f) or 0
+        for f in info.get("formats", [])
+        if f.get("format_id") != TIKTOK_WATERMARK_FORMAT_ID
+    ]
+    return format_size(max(candidates, default=0))
+
+
+def _format_opts(dtype, resolution):
+    """
+    Builds the yt-dlp format options for a download type.
+
+    Parameters:
+    dtype (str): "audio", "tiktok" or "video".
+    resolution (str/int/None): Max video height; None means best.
+
+    Returns:
+    dict: yt-dlp options to merge into the download options.
+    """
+    if dtype == "audio":
+        return {
+            'format': 'bestaudio/best',
+            'writethumbnail': False,
+            'postprocessors': [
+                {
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                },
+                {
+                    'key': 'FFmpegMetadata',
+                },
+            ],
+            'embedthumbnail': False,
+            'prefer_ffmpeg': True,
+        }
+    if dtype == "tiktok":
+        return {'format': f'best[format_id!={TIKTOK_WATERMARK_FORMAT_ID}]/best'}
+
+    # Falls back to the closest lower height when the exact one doesn't exist
+    height_filter = f"[height<={int(resolution)}]" if resolution else ""
+    return {
+        # mp4-native streams first, so Shorts don't come out as .webm
+        'format': (
+            f'bestvideo[ext=mp4]{height_filter}+bestaudio[ext=m4a]/'
+            f'best[ext=mp4]{height_filter}/'
+            f'bestvideo{height_filter}+bestaudio/best{height_filter}/best'
+        ),
+        'merge_output_format': 'mp4',
+    }
+
+
+# ---------- Cover art (audio) ----------
 
 def clean_title_for_search(title):
+    """
+    Strips bracketed junk like "[Official Video]" from a title.
+
+    Parameters:
+    title (str/None): The video title.
+
+    Returns:
+    str: The cleaned title for a music search.
+    """
     cleaned = _TITLE_JUNK_RE.sub("", title or "")
     cleaned = cleaned.replace("|", " ").strip(" -|")
     return cleaned.strip()
 
 
 def _normalize_for_match(s):
-    """Lowercase, alnum-only - lets 'Don't Stop' match "dont stop"."""
+    """
+    Normalizes text for loose matching.
+
+    Parameters:
+    s (str/None): The text.
+
+    Returns:
+    str: Lowercase letters and digits only, e.g. "Don't Stop" -> "dontstop".
+    """
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 
 
 def get_itunes_cover_art(title):
     """
-    Looks up `title` on iTunes' free public search API (no key required)
-    and returns a high-resolution official cover art URL for the best
-    match, or None if nothing reasonable was found (any error is treated
-    the same as "no match" - this is a nice-to-have, never worth failing
-    the whole download over).
+    Looks up official cover art on the iTunes search API.
 
-    iTunes' search always returns its closest guess even when nothing
-    actually matches (e.g. a video titled "Interstellar Main Theme -
-    Extra Extended - Soundtrack by Hans Zimmer" can come back matched to
-    an unrelated "First Step" track just because "Hans Zimmer" appears
-    in both) - accepting that blindly means embedding the wrong cover
-    art instead of falling back to the video's own thumbnail. So the
-    match is only trusted when the returned track's name actually shows
-    up in the searched title; otherwise this returns None like a real
-    "no match" would, and the caller falls back to the video thumbnail.
+    iTunes always returns its closest guess, so the match is only trusted
+    when the track name appears in the title. Errors count as no match.
+
+    Parameters:
+    title (str): The video title.
+
+    Returns:
+    str/None: A 1200x1200 artwork URL, or None.
     """
     query = clean_title_for_search(title)
     if not query:
@@ -279,12 +390,10 @@ def get_itunes_cover_art(title):
         if not track_name or track_name not in _normalize_for_match(query):
             return None
 
-        # iTunes serves artwork at a small fixed size by default (e.g.
-        # ".../100x100bb.jpg") - swap in a much larger size, which the
-        # same CDN happily serves for the same image.
         artwork_url = results[0].get("artworkUrl100")
         if not artwork_url:
             return None
+        # The CDN serves any size: swap 100x100 for 1200x1200
         return re.sub(r"\d+x\d+bb\.jpg$", "1200x1200bb.jpg", artwork_url)
 
     except Exception as e:
@@ -293,6 +402,12 @@ def get_itunes_cover_art(title):
 
 
 def make_square(image_path):
+    """
+    Center-crops an image to a 1920x1920 JPEG, in place.
+
+    Parameters:
+    image_path (str): Path of the image.
+    """
     try:
         img = Image.open(image_path).convert("RGB")
 
@@ -312,167 +427,237 @@ def make_square(image_path):
         print("Thumbnail processing error:", e)
 
 
-def download_percent(d):
+def _fetch_cover_art(url, out_dir):
     """
-    Extracts an integer 0-100 percent from a yt-dlp progress-hook dict
-    for status == "downloading". Returns None if the total size isn't
-    known yet (e.g. the very start of the download, or a stream whose
-    length yt-dlp can't predict) - callers should just skip updating on
-    None rather than showing a misleading 0%.
+    Downloads square cover art: iTunes artwork, else the video's largest thumbnail.
 
-    Shared by app.py's SSE progress endpoint and telegram_bot.py's
-    message-editing progress so both report identically instead of two
-    slightly different copies of the same math drifting apart.
+    Parameters:
+    url (str): The video link.
+    out_dir (str): Folder to save the image in.
+
+    Returns:
+    str/None: Path of the image, or None if none could be downloaded.
     """
-    total = d.get('total_bytes') or d.get('total_bytes_estimate')
-    downloaded = d.get('downloaded_bytes', 0)
-    if not total:
+    info = get_video_info(url)
+    thumb_url = get_itunes_cover_art(info.get("title", ""))
+
+    if not thumb_url:
+        thumbnails = info.get("thumbnails", [])
+        if thumbnails:
+            thumb_url = max(thumbnails, key=lambda t: t.get("width", 0))["url"]
+
+    if not thumb_url:
         return None
-    return int(downloaded / total * 100)
+
+    thumb_path = os.path.join(out_dir, "thumb_temp.jpg")
+    try:
+        response = requests.get(thumb_url, stream=True)
+        with open(thumb_path, "wb") as f:
+            for chunk in response.iter_content(1024):
+                f.write(chunk)
+        make_square(thumb_path)
+        return thumb_path
+    except Exception as e:
+        print("Thumbnail download failed:", e)
+        return None
+
+
+def _embed_cover_art(mp3_path, thumb_path):
+    """
+    Embeds an image as the mp3's front cover, in place.
+
+    Parameters:
+    mp3_path (str): Path of the mp3.
+    thumb_path (str): Path of the cover image.
+    """
+    tmp_path = os.path.join(os.path.dirname(mp3_path), f"final_{os.path.basename(mp3_path)}")
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", mp3_path, "-i", thumb_path,
+            "-map", "0:0", "-map", "1:0",
+            "-c:a", "copy",
+            "-c:v", "mjpeg",
+            "-id3v2_version", "3",
+            "-metadata:s:v", "title=Album cover",
+            "-metadata:s:v", "comment=Cover (front)",
+            tmp_path,
+        ],
+        capture_output=True,
+    )
+    _swap_in(tmp_path, mp3_path, result.returncode == 0)
+
+
+# ---------- ffprobe / ffmpeg ----------
+
+def _ffprobe(path, *args):
+    """
+    Runs ffprobe on a file and returns its bare output values.
+
+    Parameters:
+    path (str): Path of the media file.
+    *args (str): ffprobe options, e.g. "-show_entries", "format=duration".
+
+    Returns:
+    list/None: Output values in order, or None if ffprobe fails.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", *args,
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=15,
+        )
+        return result.stdout.split()
+    except Exception:
+        return None
+
+
+def _probe_number(path, cast, *args):
+    """
+    Reads one number with ffprobe.
+
+    Parameters:
+    path (str): Path of the media file.
+    cast (type): int or float.
+    *args (str): ffprobe options.
+
+    Returns:
+    int/float/None: The first value converted with cast, or None.
+    """
+    try:
+        return cast(_ffprobe(path, *args)[0])
+    except (TypeError, IndexError, ValueError):
+        return None
+
+
+def probe_dimensions(path):
+    """
+    Reads a video's size and length.
+
+    Parameters:
+    path (str): Path of the video.
+
+    Returns:
+    tuple: (width, height, duration in seconds), or (None, None, None).
+    """
+    values = _ffprobe(
+        path, "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration",
+    )
+    try:
+        width, height, duration = values
+        return int(width), int(height), int(float(duration))
+    except (TypeError, ValueError):
+        return None, None, None
 
 
 def _get_source_fps(path):
-    """Best-effort read of the source video's frame rate (e.g.
-    "30000/1001") via ffprobe, so normalize_for_social() re-encodes at
-    the same nominal rate instead of guessing a fixed number. Falls
-    back to "30" if ffprobe is missing or can't tell (rare)."""
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=r_frame_rate",
-                "-of", "default=noprint_wrappers=1:nokey=1", path,
-            ],
-            capture_output=True, text=True, timeout=15,
-        )
-        fps = result.stdout.strip()
-        return fps if fps and fps != "0/0" else "30"
-    except Exception:
-        return "30"
+    """
+    Reads a video's frame rate.
+
+    Parameters:
+    path (str): Path of the video.
+
+    Returns:
+    str: Frame rate like "30000/1001", or "30" if unknown.
+    """
+    values = _ffprobe(path, "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate")
+    fps = values[0] if values else None
+    return fps if fps and fps != "0/0" else "30"
 
 
 def _get_duration_seconds(path):
-    """Best-effort source duration in seconds, used to turn ffmpeg's raw
-    out_time into a 0-100 percent for normalize_for_social()'s progress
-    reporting. Returns None if ffprobe can't tell (progress reporting is
-    then just skipped - the re-encode itself is unaffected)."""
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", path,
-            ],
-            capture_output=True, text=True, timeout=15,
-        )
-        return float(result.stdout.strip())
-    except Exception:
-        return None
+    """
+    Reads a media file's duration.
+
+    Parameters:
+    path (str): Path of the media file.
+
+    Returns:
+    float/None: Duration in seconds, or None if unknown.
+    """
+    return _probe_number(path, float, "-show_entries", "format=duration")
+
+
+def _get_height(path):
+    """
+    Reads a video's height.
+
+    Parameters:
+    path (str): Path of the video.
+
+    Returns:
+    int/None: Height in pixels, or None if unknown.
+    """
+    return _probe_number(path, int, "-select_streams", "v:0", "-show_entries", "stream=height")
 
 
 def _already_social_safe(path):
     """
-    True if `path` is already constant-frame-rate H.264/AAC/yuv420p -
-    i.e. re-encoding it would only cost quality for no compatibility
-    gain, so normalize_for_social() should just fast-remux it instead.
+    Checks whether a video only needs a remux, not a re-encode.
 
-    In practice this is the exception, not the rule: YouTube and TikTok
-    both serve their best-quality streams as AV1 or HEVC, neither of
-    which most social apps' upload pipelines accept directly (that
-    mismatch was the original "slow/choppy upload" bug this whole
-    normalization step exists to fix) - so most downloads still need
-    the real re-encode below. This check exists for the formats that
-    *are* already safe (some lower-quality TikTok/YouTube renditions
-    are plain CFR H.264), so those don't pay a quality cost for
-    nothing.
+    Parameters:
+    path (str): Path of the video.
+
+    Returns:
+    bool: True if it is already constant-frame-rate H.264 yuv420p.
     """
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,pix_fmt,r_frame_rate,avg_frame_rate",
-                "-of", "default=noprint_wrappers=1:nokey=1", path,
-            ],
-            capture_output=True, text=True, timeout=15,
-        )
-        codec, pix_fmt, r_fps, avg_fps = result.stdout.split()
-        return codec == "h264" and pix_fmt == "yuv420p" and r_fps == avg_fps
-    except Exception:
+    values = _ffprobe(
+        path, "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,pix_fmt,r_frame_rate,avg_frame_rate",
+    )
+    if not values or len(values) != 4:
         return False
+    codec, pix_fmt, r_fps, avg_fps = values
+    return codec == "h264" and pix_fmt == "yuv420p" and r_fps == avg_fps
 
 
-def _get_height(path):
-    """Best-effort source video height in pixels, or None if ffprobe
-    can't tell. Used by normalize_for_social()'s max_height option to
-    decide whether downscaling is actually needed."""
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=height",
-                "-of", "default=noprint_wrappers=1:nokey=1", path,
-            ],
-            capture_output=True, text=True, timeout=15,
-        )
-        return int(result.stdout.strip())
-    except Exception:
-        return None
+def _remove_if_exists(path):
+    """
+    Deletes a file if it exists.
+
+    Parameters:
+    path (str): Path of the file.
+    """
+    if os.path.exists(path):
+        os.remove(path)
+
+
+def _swap_in(tmp_path, path, ok):
+    """
+    Replaces a file with its processed copy, or discards the copy.
+
+    Parameters:
+    tmp_path (str): Path of the processed copy.
+    path (str): Path of the original file.
+    ok (bool): Whether processing succeeded.
+
+    Returns:
+    bool: True if the original was replaced.
+    """
+    if ok and os.path.exists(tmp_path):
+        os.replace(tmp_path, path)
+        return True
+    _remove_if_exists(tmp_path)
+    return False
 
 
 def normalize_for_social(path, progress_hook=None, max_height=None):
     """
-    Makes the video at `path` safe to post on Instagram/TikTok/Facebook
-    without their own upload pipeline choking on it - constant frame
-    rate (CFR), H.264/AAC, in an mp4 container with a fast-start moov
-    atom - re-encoding only if the source doesn't already qualify.
+    Makes a video safe to post on Instagram/TikTok/Facebook, in place.
 
-    Two separate problems this addresses, both caused by yt-dlp's
-    video+audio merge only muxing streams together (-c copy, no
-    re-encode) rather than fixing them up:
+    Their upload pipelines choke on variable frame rate (choppy playback) and
+    on AV1/HEVC (slow uploads), so the video is re-encoded to constant-frame-rate
+    H.264/AAC mp4 at CRF 18. Videos that already qualify are only remuxed
+    with +faststart, losslessly. On any ffmpeg failure the original is kept.
 
-    1. VFR (variable frame rate) - common on YouTube's adaptive streams
-       and on re-encoded TikTok content. Every major social platform
-       re-transcodes whatever you post into its own delivery format
-       server-side, and those transcoders assume constant frame rate:
-       fed a VFR file, they drop/duplicate frames, which is what shows
-       up as choppy/stuttery playback in the posted result even though
-       the file played back smoothly on-device before uploading.
-    2. Codec - YouTube and TikTok's best-quality streams are typically
-       AV1 or HEVC, not H.264. Most social apps' upload pipelines only
-       handle H.264 well; handed anything else, the app does its own
-       (slow, sometimes janky) client-side transcode before it'll even
-       accept the upload - this was the original "upload is slow"
-       complaint that led to this whole function existing.
-
-    If the source is already CFR H.264/AAC/yuv420p (checked by
-    _already_social_safe()), neither problem applies, so this just
-    fast-remuxes it (+faststart only, no re-encode - zero quality
-    loss) instead of needlessly recompressing an already-fine file.
-    Otherwise it does the full re-encode, which is unavoidably lossy
-    to some degree (video has to be decoded and recompressed to change
-    codec/frame timing at all) - CRF 18 keeps that loss close to
-    visually unnoticeable at the cost of a larger file than CRF 20 was.
-
-    If given, `progress_hook` receives {"status": "normalizing",
-    "percent": int} updates as it runs (parsed from ffmpeg's own
-    -progress stream) - a full re-encode, in particular, can take
-    longer than the original download on a long video, and a caller
-    with no visibility into that otherwise looks stuck.
-
-    `max_height`, if given, downscales video taller than that (e.g.
-    "480") during the re-encode - unlike `download_media`'s own
-    `resolution` cap (which only affects yt-dlp's format *selection*
-    and does nothing for TikTok, whose format string has no height
-    filter at all), this applies regardless of source or platform,
-    since it runs after the file already exists. It exists for testing
-    on a slow connection, not normal use: a smaller file uploads
-    proportionally faster on a bandwidth-limited link. It forces the
-    full re-encode path even for an otherwise-already-safe source,
-    since downscaling requires decoding and re-encoding regardless.
-
-    Best-effort: if ffmpeg fails or isn't installed, the original file
-    is left untouched rather than failing the whole download over what
-    is otherwise a perfectly usable file.
+    Parameters:
+    path (str): Path of the video.
+    progress_hook (callable/None): Receives {"status": "normalizing", "percent": int}.
+    max_height (str/int/None): Downscales taller videos, forcing a re-encode.
     """
+    def report(percent):
+        if progress_hook:
+            progress_hook({"status": "normalizing", "percent": percent})
+
     needs_downscale = False
     if max_height:
         height = _get_height(path)
@@ -485,25 +670,17 @@ def normalize_for_social(path, progress_hook=None, max_height=None):
                 ["ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", tmp_path],
                 capture_output=True, timeout=120,
             )
-            if result.returncode == 0 and os.path.exists(tmp_path):
-                os.replace(tmp_path, path)
-            elif os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            _swap_in(tmp_path, path, result.returncode == 0)
         except Exception as e:
             print("Fast-start remux failed, keeping original file:", e)
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        if progress_hook:
-            progress_hook({"status": "normalizing", "percent": 100})
+            _remove_if_exists(tmp_path)
+        report(100)
         return
 
     fps = _get_source_fps(path)
     duration = _get_duration_seconds(path)
     tmp_path = path + ".normalized.mp4"
-
-    scale_args = (
-        ["-vf", f"scale=-2:'min(ih,{int(max_height)})'"] if needs_downscale else []
-    )
+    scale_args = ["-vf", f"scale=-2:'min(ih,{int(max_height)})'"] if needs_downscale else []
 
     try:
         process = subprocess.Popen(
@@ -533,53 +710,43 @@ def normalize_for_social(path, progress_hook=None, max_height=None):
                 percent = min(99, int(out_time_ms / 1_000_000 / duration * 100))
                 if percent != last_percent:
                     last_percent = percent
-                    progress_hook({"status": "normalizing", "percent": percent})
+                    report(percent)
 
         _, stderr = process.communicate(timeout=600)
 
-        if process.returncode == 0 and os.path.exists(tmp_path):
-            os.replace(tmp_path, path)
-            if progress_hook:
-                progress_hook({"status": "normalizing", "percent": 100})
+        if _swap_in(tmp_path, path, process.returncode == 0):
+            report(100)
         else:
             print(
                 "Social-media normalization failed, keeping original file:",
                 (stderr or "")[-500:],
             )
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
     except Exception as e:
         print("Social-media normalization failed, keeping original file:", e)
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        _remove_if_exists(tmp_path)
 
+
+# ---------- Download ----------
 
 def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     """
-    Downloads a video ("video"), audio ("audio"), or watermark-free
-    TikTok clip ("tiktok") from `url` into `out_dir`.
+    Downloads a video or its audio.
 
-    `progress_hook` is optional and receives yt-dlp's normal progress
-    dict (status/percent/etc.) - pass one to report live progress (the
-    web app does; the Telegram bot doesn't need to).
+    Parameters:
+    url (str): The video link.
+    dtype (str): "video" (mp4), "audio" (mp3 with cover art) or "tiktok" (no watermark).
+    out_dir (str): Folder to save the file in.
+    progress_hook (callable/None): Receives yt-dlp progress dicts, then "normalizing" updates.
+    resolution (str/int/None): Max height for video and TikTok; None means best.
 
-    `resolution` (dtype == "video" only) caps the download to that
-    height or less, e.g. 720 for "720p or the closest lower option this
-    video actually has". None (default) downloads the best available.
-    Ignored for "audio" and "tiktok" (TikTok's format selection already
-    picks a specific single stream to dodge the watermark - there's
-    nothing to cap).
+    Returns:
+    str: Path of the downloaded file.
 
-    Returns the absolute path of the final downloaded file. Raises on
-    failure (typically yt_dlp.utils.DownloadError, or ValueError for a
-    content type we know isn't supported - see the /photo/ check below).
+    Raises:
+    yt_dlp.utils.DownloadError: If the download fails.
+    ValueError: For TikTok photo posts, which yt-dlp can't download.
     """
-    if "tiktok.com" in url.lower() and "/photo/" in url.lower():
-        # TikTok "Photo Mode" posts (an image slideshow + background
-        # audio, not an actual video file) have no yt-dlp extractor at
-        # all as of this writing - only regular /video/ posts work.
-        # Fail with a clear message instead of yt-dlp's raw internal
-        # "Unsupported URL" error.
+    if is_tiktok(url) and "/photo/" in url.lower():
         raise ValueError(
             "This is a TikTok photo/slideshow post, not a video - that "
             "format isn't supported (only regular TikTok videos are)."
@@ -592,147 +759,29 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
         'quiet': True,
         'no_warnings': True,
         **_cookie_opts(),
+        **_format_opts(dtype, resolution),
     }
     if progress_hook:
         ydl_opts['progress_hooks'] = [progress_hook]
 
-    thumb_path = None
+    thumb_path = _fetch_cover_art(url, out_dir) if dtype == "audio" else None
 
-    # ================= GET BEST THUMBNAIL (audio only) =================
-    if dtype == "audio":
-        info_for_thumb = get_video_info(url)
-
-        # Prefer the real, official song cover art (from iTunes) over the
-        # video's own thumbnail, which is often just a still frame, a
-        # lyric-video background, or otherwise unrelated to the actual
-        # album art. Falls back to the video thumbnail whenever no good
-        # iTunes match is found.
-        thumb_url = get_itunes_cover_art(info_for_thumb.get("title", ""))
-
-        if not thumb_url:
-            thumbnails = info_for_thumb.get("thumbnails", [])
-            if thumbnails:
-                best_thumb = max(thumbnails, key=lambda t: t.get("width", 0))
-                thumb_url = best_thumb["url"]
-
-        if thumb_url:
-            thumb_path = os.path.join(out_dir, "thumb_temp.jpg")
-
-            try:
-                response = requests.get(thumb_url, stream=True)
-                with open(thumb_path, "wb") as f:
-                    for chunk in response.iter_content(1024):
-                        f.write(chunk)
-                make_square(thumb_path)
-            except Exception as e:
-                print("Thumbnail download failed:", e)
-                thumb_path = None
-
-    # ================= FORMAT SELECTION =================
-    if dtype == "audio":
-        ydl_opts.update({
-            'format': 'bestaudio/best',
-            'writethumbnail': False,
-            'postprocessors': [
-                {
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                },
-                {
-                    'key': 'FFmpegMetadata',
-                },
-            ],
-            'embedthumbnail': False,
-            'prefer_ffmpeg': True,
-        })
-    elif dtype == "tiktok":
-        # TikTok's watermarked stream is always exposed as the format id
-        # "download" (format_note "...watermarked", lowercase - a plain
-        # substring filter on "Watermark" silently missed it). Excluding
-        # that id by name leaves only the clean h264/bytevc1 play formats
-        # to choose from.
-        ydl_opts.update({
-            'format': 'best[format_id!=download]/best'
-        })
-    else:
-        if resolution:
-            # Cap at the chosen height; falls through to the closest
-            # lower option (yt-dlp's own comparison operators) if this
-            # exact video doesn't have that exact resolution.
-            height_filter = f"[height<={int(resolution)}]"
-        else:
-            height_filter = ""
-        ydl_opts.update({
-            # Prefer genuinely mp4-native streams (h264 video + m4a
-            # audio) first - YouTube Shorts in particular often only
-            # advertises "best" as a VP9/webm pair, which downloaded as
-            # a .webm file instead of the .mp4 every other button here
-            # produces. Falling back to plain bestvideo+bestaudio keeps
-            # this working for sites/videos with no mp4 option at all.
-            'format': (
-                f'bestvideo[ext=mp4]{height_filter}+bestaudio[ext=m4a]/'
-                f'best[ext=mp4]{height_filter}/'
-                f'bestvideo{height_filter}+bestaudio/best{height_filter}/best'
-            ),
-            # Whatever combination of streams gets picked, remux the
-            # final container to mp4 - guarantees a .mp4 file (and a
-            # filename extension that actually matches it) even in the
-            # rare case only webm-native streams exist for this video.
-            'merge_output_format': 'mp4',
-        })
-
-    # ================= DOWNLOAD =================
     info, effective_opts = extract_info_with_fallback(ydl_opts, url, download=True)
 
+    # prepare_filename() applies the same truncation/sanitizing as the outtmpl
     with yt_dlp.YoutubeDL(effective_opts) as ydl:
-        # prepare_filename() applies the same 80-char truncation and
-        # character sanitization as the outtmpl above, so this always
-        # matches what yt-dlp actually wrote to disk. Building the name
-        # from the raw, untruncated title instead produced a filename
-        # that didn't exist on disk for long/special-character titles.
-        base_filename = os.path.basename(ydl.prepare_filename(info))
-        if dtype == "audio":
-            # FFmpegExtractAudio always re-muxes to mp3, regardless of
-            # the original container extension yt-dlp reports here.
-            filename = os.path.splitext(base_filename)[0] + ".mp3"
-        else:
-            filename = base_filename
-
+        filename = os.path.basename(ydl.prepare_filename(info))
+    if dtype == "audio":
+        filename = os.path.splitext(filename)[0] + ".mp3"
     final_path = os.path.join(out_dir, filename)
 
-    # ================= EMBED THUMBNAIL (audio only) =================
-    if dtype == "audio" and thumb_path and os.path.exists(final_path):
-        embed_path = os.path.join(out_dir, f"final_{filename}")
+    if thumb_path and os.path.exists(final_path):
+        _embed_cover_art(final_path, thumb_path)
+    if thumb_path:
+        _remove_if_exists(thumb_path)
 
-        result = os.system(f'''
-        ffmpeg -y -i "{final_path}" -i "{thumb_path}" \
-        -map 0:0 -map 1:0 \
-        -c:a copy \
-        -c:v mjpeg \
-        -id3v2_version 3 \
-        -metadata:s:v title="Album cover" \
-        -metadata:s:v comment="Cover (front)" \
-        "{embed_path}"
-        ''')
-
-        if result == 0 and os.path.exists(embed_path):
-            os.remove(final_path)
-            os.rename(embed_path, final_path)
-
-    if thumb_path and os.path.exists(thumb_path):
-        os.remove(thumb_path)
-
-    # ================= NORMALIZE FOR SOCIAL (video/tiktok only) =========
-    # yt-dlp's own "finished" progress hook already fired by this point
-    # (it fires right after the download, before this function does any
-    # of its own post-processing), so the web UI is already showing its
-    # "processing" state while this re-encode runs.
     if dtype in ("video", "tiktok") and os.path.exists(final_path):
-        # `resolution` only affects yt-dlp's format *selection* above,
-        # which does nothing for TikTok (no height filter in its format
-        # string) - passing it here too makes it a real cap regardless
-        # of platform, since this runs after the file already exists.
+        # Also caps TikTok, whose format string has no height filter
         normalize_for_social(final_path, progress_hook=progress_hook, max_height=resolution)
 
     return final_path

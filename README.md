@@ -1,4 +1,20 @@
+<div align="center">
+
 # Video Downloader
+
+**Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
+
+[![Version](https://img.shields.io/badge/version-0.8.2-blue)](CHANGELOG.md)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
+[![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
+[![python-telegram-bot](https://img.shields.io/badge/python--telegram--bot-21.10-26A5E4?logo=telegram&logoColor=white)](https://python-telegram-bot.org/)
+[![FFmpeg](https://img.shields.io/badge/FFmpeg-required-007808?logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
+[![Last commit](https://img.shields.io/github/last-commit/chhunlay/video-downloader)](https://github.com/chhunlay/video-downloader/commits)
+
+[Setup](#setup) · [Web app](#running-the-web-app) · [Telegram bot](#running-the-telegram-bot) · [Instagram / Facebook](#instagram--facebook-links) · [Changelog](CHANGELOG.md)
+
+</div>
 
 Downloads videos from YouTube and TikTok (TikTok comes back with the
 watermark removed) via a web app or a Telegram bot, both backed by the

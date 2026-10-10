@@ -5,6 +5,46 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.8.2] - 2026-10-11
+### Added
+- README header with a centered title, tagline, badges (version,
+  Python, Flask, yt-dlp, python-telegram-bot, FFmpeg, last commit) and
+  quick links to each section.
+
+## [0.8.1] - 2026-10-11
+### Changed
+- Cleaned up code comments: short and current, with long history notes
+  removed. Every Python function now has a docstring with Parameters
+  and Returns sections.
+- Removed duplicate code, with no change in behavior:
+  - One ffprobe helper replaces five near-identical calls; the bot's
+    video-dimension probe moved into `downloader.py`.
+  - Temp-file swap/cleanup, TikTok link detection, the watermark
+    format id and size estimates (including the bot's TikTok size)
+    now live in one place in `downloader.py`.
+  - `download_media` is split into small helpers for format options,
+    cover-art download and cover-art embedding.
+  - The bot's two button handlers share one pending-link lookup, and
+    progress/size labels share one formatter each.
+  - `script.js` shares helpers for showing/hiding sections, the
+    resolution picker and form POSTs.
+
+### Fixed
+- Embedding mp3 cover art no longer breaks on titles containing
+  quotes (ffmpeg now runs without a shell), and a failed embed no
+  longer leaves a stray `final_*.mp3` file behind.
+- Picking "Video" on a link with no resolution list no longer reuses
+  the previous video's resolution.
+
+## [0.8.0] - 2026-09-14
+### Changed
+- Resolution picker redesigned as a tappable card grid instead of a
+  dropdown `<select>`, each card showing its approximate file size
+  (wires up the existing `get_resolutions_with_sizes` helper, which the
+  `/info` endpoint wasn't using yet).
+- Removed the standalone "Best available" card; the highest resolution
+  is now pre-selected by default instead.
+
 ## [0.7.0] - 2026-09-07
 ### Added
 - YouTube resolution picker and a custom Telegram bot icon.
