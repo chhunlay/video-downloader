@@ -1,18 +1,8 @@
 """
-Desktop shell for the Video Downloader.
+Desktop shell: runs app.py's Flask server in a thread and shows it in a native pywebview window.
 
-Runs the existing Flask app (app.py) in a background thread and opens it
-inside a native window via pywebview - no browser tab, no visible
-terminal, no separate "start the server" step for the end user.
-
-This is what PyInstaller packages into a single .exe. Build it (on a
-Windows machine, since PyInstaller does not cross-compile) with:
-
-    pyinstaller --onefile --windowed --name VideoDownloader ^
-        --add-data "templates;templates" ^
-        desktop_app.py
-
-The resulting dist\\VideoDownloader.exe is the whole app.
+This is what PyInstaller packages into VideoDownloader.exe (build on Windows,
+see build_windows.bat and BUILD_WINDOWS.md).
 """
 
 import socket
@@ -21,29 +11,36 @@ import threading
 
 import webview
 
-import app as flask_app  # the existing app.py - reused unchanged
+import app as flask_app
 
 HOST = "127.0.0.1"
 
 
 def find_free_port():
-    """app.py hardcodes port 5050, but bind to an OS-assigned free port
-    instead so a leftover process (or another copy of the app) can never
-    collide with it - the actual port is discovered below, not guessed."""
+    """
+    Finds a free port, so a leftover process can't collide with ours.
+
+    Returns:
+    int: A port number chosen by the OS.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((HOST, 0))
         return s.getsockname()[1]
 
 
 def run_flask(port):
-    # debug=False and use_reloader=False are required here: the reloader
-    # forks a second process expecting to be launched as a normal Python
-    # script, which breaks (or double-launches the window) once this is
-    # frozen into a single .exe by PyInstaller.
+    """
+    Runs the Flask server (blocks).
+
+    Parameters:
+    port (int): Port to listen on.
+    """
+    # The debug reloader forks a second process, which breaks inside a frozen .exe
     flask_app.app.run(host=HOST, port=port, debug=False, use_reloader=False, threaded=True)
 
 
 def main():
+    """Starts the server and opens the app window; returns when the window closes."""
     port = find_free_port()
 
     server_thread = threading.Thread(target=run_flask, args=(port,), daemon=True)
@@ -56,8 +53,7 @@ def main():
         height=780,
         resizable=True,
     )
-    # blocks until the window is closed, then the process exits
-    # (the Flask thread is a daemon thread, so it's torn down with it)
+    # Blocks until the window closes; the daemon server thread exits with it
     webview.start()
 
 
