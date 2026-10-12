@@ -4,7 +4,9 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -440,13 +442,63 @@ def video_info():
         return jsonify({"error": str(e)})
 
 
-if __name__ == "__main__":
+# Port 5050 because macOS AirPlay takes 5000
+PORT = 5050
+
+
+def start_tunnel():
+    """
+    Starts a temporary Cloudflare Tunnel that gives the app a public URL.
+
+    Needs `brew install cloudflared`; it prints a random *.trycloudflare.com address.
+
+    Returns:
+    subprocess.Popen/None: The cloudflared process, or None if it isn't installed.
+    """
+    try:
+        return subprocess.Popen(["cloudflared", "tunnel", "--url", f"http://localhost:{PORT}"])
+    except FileNotFoundError:
+        print("cloudflared not found - running without a public link")
+        return None
+
+
+def stop_tunnel(tunnel):
+    """
+    Stops the cloudflared process, forcing it if it doesn't exit in 5 seconds.
+
+    Parameters:
+    tunnel (subprocess.Popen/None): The process from start_tunnel().
+    """
+    if tunnel is None:
+        return
+    tunnel.terminate()
+    try:
+        tunnel.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        tunnel.kill()
+
+
+def main():
+    """
+    Runs the web app with one public tunnel, closing the tunnel when the app stops.
+
+    Debug mode stays off: its auto-reloader re-ran this function on every code
+    change, leaving a new cloudflared behind each time, and its debugger must
+    never be reachable through the public link.
+    """
     store.load()
     store.start_cleanup_thread()
 
-    # Public URL via a temporary Cloudflare Tunnel (needs `brew install cloudflared`);
-    # it prints a random *.trycloudflare.com address
-    subprocess.Popen(["cloudflared", "tunnel", "--url", "http://localhost:5050"])
+    # `kill` (SIGTERM) normally skips finally blocks; turn it into a normal exit
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
 
-    # Port 5050 because macOS AirPlay takes 5000; 0.0.0.0 allows other devices on the LAN
-    app.run(host="0.0.0.0", debug=True, port=5050)
+    tunnel = start_tunnel()
+    try:
+        # 0.0.0.0 allows other devices on the LAN
+        app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+    finally:
+        stop_tunnel(tunnel)
+
+
+if __name__ == "__main__":
+    main()

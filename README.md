@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.9.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.9.1-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -66,6 +66,11 @@ Open **http://localhost:5050**. Paste a link, pick a type (video/audio/
 TikTok) and resolution, and download. Open **Options** for trim, audio
 quality and subtitles, or switch to **Batch** for several links.
 Downloads are stored in `app/downloads/<job id>/` for 24 hours.
+
+If [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+is installed (`brew install cloudflared`), the app also opens one public
+`*.trycloudflare.com` link, printed at startup, and closes it when the app
+stops. The server doesn't auto-reload: restart it after changing the code.
 
 ## Running the Telegram bot
 

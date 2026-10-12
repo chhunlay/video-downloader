@@ -5,6 +5,17 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.9.1] - 2026-10-13
+### Fixed
+- The web app no longer leaves Cloudflare tunnels running. Flask's debug
+  auto-reloader started a new `cloudflared` on every code change and never
+  closed the old one; the app now runs one tunnel and closes it on exit,
+  including on Ctrl+C and `kill`.
+- Debug mode is off, so Flask's interactive debugger is no longer
+  reachable through the public link.
+- The app still starts (without a public link) when `cloudflared` isn't
+  installed.
+
 ## [0.9.0] - 2026-10-12
 ### Added
 - Audio quality choice for the web app: MP3 at 128, 192 or 320 kbps, or
