@@ -5,6 +5,33 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.9.0] - 2026-10-12
+### Added
+- Audio quality choice for the web app: MP3 at 128, 192 or 320 kbps, or
+  M4A (cover art is embedded in both).
+- Trim: optional start/end time for video, audio and TikTok downloads;
+  only the chosen part is downloaded.
+- Subtitles: pick a language the video offers, then save an `.srt` next
+  to the video or burn the subtitles into the picture. Burned subtitles
+  use complex text shaping so Khmer renders correctly, and subtitles
+  line up with trimmed clips.
+- Batch / playlist mode: paste up to 50 links or a playlist link and get
+  one `.zip`; failed links are skipped and listed.
+- Recent downloads: each browser keeps its own history with Save and
+  Delete; expired downloads are marked as such.
+- Job system (`app/jobs.py`): every download gets its own folder and
+  progress, survives a server restart, and is cleaned up after 24 hours.
+- Tests for all of the above (127 tests).
+
+### Changed
+- Files stay available for 24 hours instead of being deleted after the
+  first save.
+- Two people downloading at the same time no longer see each other's
+  progress or files.
+- The remaining emojis on the page are replaced with outline icons.
+- The download buttons and options now sit in their own section, so
+  batch mode works without a preview.
+
 ## [0.8.6] - 2026-10-12
 ### Added
 - Automated tests (pytest, 54 tests) for the download helpers, the web
