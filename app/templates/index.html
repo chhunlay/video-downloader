@@ -33,26 +33,45 @@
     <!-- Card -->
     <div class="glass-card rounded-3xl shadow-2xl shadow-black/40 p-6">
 
-        <label class="block mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Video URL</label>
-        <div class="relative mb-1">
-            <input id="url" type="text" placeholder="Paste a YouTube or TikTok link…"
-                   autocomplete="off" autocorrect="off" spellcheck="false"
-                   class="url-input w-full py-3 pl-4 pr-10 rounded-xl outline-none transition-all">
-            <!-- Centered by the wrapper: a translate on the SVG would fight animate-spin -->
-            <div class="absolute right-3 inset-y-0 flex items-center pointer-events-none">
-                <svg id="loadingSpinner" class="animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
-                </svg>
-            </div>
+        <!-- Single / Batch switch -->
+        <div class="seg grid grid-cols-2 p-1 rounded-xl mb-5" role="tablist">
+            <button id="modeSingle" type="button" class="seg-btn active py-2 rounded-lg text-sm font-semibold" onclick="setMode('single')">Single</button>
+            <button id="modeBatch" type="button" class="seg-btn py-2 rounded-lg text-sm font-semibold" onclick="setMode('batch')">Batch</button>
         </div>
-        <p id="fetchingLabel" class="text-xs text-indigo-400 font-medium flex items-center gap-1.5">
-            <span>Fetching preview…</span>
-        </p>
 
-        <!-- Error / Not Found Message -->
+        <!-- Single link -->
+        <div id="singleInput">
+            <label class="block mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Video URL</label>
+            <div class="relative mb-1">
+                <input id="url" type="text" placeholder="Paste a YouTube or TikTok link…"
+                       autocomplete="off" autocorrect="off" spellcheck="false"
+                       class="url-input w-full py-3 pl-4 pr-10 rounded-xl outline-none transition-all">
+                <!-- Centered by the wrapper: a translate on the SVG would fight animate-spin -->
+                <div class="absolute right-3 inset-y-0 flex items-center pointer-events-none">
+                    <svg id="loadingSpinner" class="animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                    </svg>
+                </div>
+            </div>
+            <p id="fetchingLabel" class="text-xs text-indigo-400 font-medium flex items-center gap-1.5">
+                <span>Fetching preview…</span>
+            </p>
+        </div>
+
+        <!-- Batch links -->
+        <div id="batchInput" class="hidden">
+            <label class="block mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Links</label>
+            <textarea id="urls" rows="5" placeholder="One link per line, or a playlist link…"
+                      autocomplete="off" autocorrect="off" spellcheck="false"
+                      class="url-input w-full py-3 px-4 rounded-xl outline-none transition-all resize-y text-sm"></textarea>
+            <p id="linkCount" class="text-xs text-muted mt-1">0 links (max 50)</p>
+        </div>
+
+        <!-- Error message -->
         <p id="errorMessage" class="hidden fade-up text-rose-400 text-sm font-medium mt-3 flex items-center gap-1.5">
-            <span>😢</span> Video not found or invalid URL
+            <svg class="h-4 w-4 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+            <span id="errorText">Video not found or invalid URL</span>
         </p>
 
         <!-- Video Info Preview -->
@@ -65,9 +84,54 @@
                 <h2 id="videoTitle" class="font-semibold text-base leading-snug line-clamp-2"></h2>
                 <p id="videoUploader" class="text-sm text-muted mt-1"></p>
             </div>
+        </div>
+
+        <!-- Options and download buttons: after a preview (single) or once links are pasted (batch) -->
+        <div id="actions" class="hidden fade-up mt-5">
+
+            <button id="optionsToggle" type="button" onclick="toggleOptions()"
+                    class="w-full flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-muted py-1">
+                Options
+                <svg id="optionsChevron" class="h-4 w-4 transition-transform" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+
+            <div id="optionsPanel" class="hidden options-panel rounded-2xl p-4 mt-2 flex flex-col gap-4">
+                <!-- Trim (single only) -->
+                <div id="trimOptions">
+                    <label class="block mb-1.5 text-xs font-semibold text-muted">Trim <span class="font-normal text-faint">(leave blank for the whole video)</span></label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <input id="trimStart" type="text" inputmode="numeric" placeholder="Start 0:00"
+                               class="url-input py-2 px-3 rounded-lg outline-none text-sm">
+                        <input id="trimEnd" type="text" inputmode="numeric" placeholder="End (e.g. 1:30)"
+                               class="url-input py-2 px-3 rounded-lg outline-none text-sm">
+                    </div>
+                </div>
+
+                <!-- Audio quality -->
+                <div>
+                    <label class="block mb-1.5 text-xs font-semibold text-muted">Audio quality</label>
+                    <div id="qualityChips" class="grid grid-cols-4 gap-2">
+                        <button type="button" class="chip" data-value="128">128</button>
+                        <button type="button" class="chip selected" data-value="192">192</button>
+                        <button type="button" class="chip" data-value="320">320</button>
+                        <button type="button" class="chip" data-value="m4a">M4A</button>
+                    </div>
+                </div>
+
+                <!-- Subtitles (single only, when the video has any) -->
+                <div id="subtitleOptions" class="hidden">
+                    <label class="block mb-1.5 text-xs font-semibold text-muted">Subtitles <span class="font-normal text-faint">(video and TikTok)</span></label>
+                    <select id="subLang" class="url-input w-full py-2 px-3 rounded-lg outline-none text-sm mb-2"></select>
+                    <div id="subModeChips" class="grid grid-cols-3 gap-2">
+                        <button type="button" class="chip selected" data-value="off">Off</button>
+                        <button type="button" class="chip" data-value="srt">.srt file</button>
+                        <button type="button" class="chip" data-value="burn">Burn in</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- Download Buttons -->
-            <div id="downloadButtons" class="grid grid-cols-2 gap-2.5 mt-5">
+            <div id="downloadButtons" class="grid grid-cols-2 gap-2.5 mt-4">
                 <button id="videoBtn" onclick="handleVideoClick()"
                         class="action-btn col-span-1 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
                     <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/></svg>
@@ -81,7 +145,7 @@
 
                 <!-- Resolution Picker: opens from "Video" and replaces the other buttons until Cancel -->
                 <div id="resolutionPicker" class="hidden col-span-2">
-                    <label class="block mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Resolution</label>
+                    <label id="resolutionLabel" class="block mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Resolution</label>
                     <!-- Holds the chosen height; set by selectResolution() -->
                     <input type="hidden" id="resolutionSelect" value="">
                     <div id="resolutionCards" class="grid grid-cols-3 gap-2"></div>
@@ -112,23 +176,35 @@
 
         <!-- Progress Card -->
         <div id="progressCard" class="hidden fade-up mt-5">
-            <div class="flex items-center justify-between mb-2">
-                <p id="status" class="text-sm font-medium text-muted">Status: Idle</p>
+            <div class="flex items-center justify-between mb-2 gap-3">
+                <p class="text-sm font-medium text-muted flex items-center gap-1.5 min-w-0">
+                    <span id="statusIcon" class="shrink-0"></span>
+                    <span id="status" class="truncate">Starting…</span>
+                    <span id="batchCounter" class="hidden shrink-0 text-faint"></span>
+                </p>
                 <p id="percentLabel" class="text-sm font-semibold text-indigo-400">0%</p>
             </div>
             <div class="progress-track w-full rounded-full h-2.5 overflow-hidden">
                 <div id="bar" class="progress-bar h-full rounded-full w-0"></div>
             </div>
+            <ul id="failedItems" class="hidden mt-3 space-y-1 text-xs text-rose-400"></ul>
         </div>
 
-        <!-- Download Link: same tab on purpose, so the app stays visible during large downloads -->
-        <a id="downloadLink" href="#"
-           class="file-link hidden fade-up mt-5 w-full flex items-center justify-center gap-2 font-bold py-3 px-4 rounded-xl transition-colors">
-            🎉 Save File
-        </a>
-        <p id="downloadHint" class="hidden fade-up text-xs text-muted text-center mt-2">
-            Opens the video — tap the <strong>Share</strong> icon, then <strong>Save Video</strong> to add it to Photos.
-        </p>
+        <!-- Shown when a download finishes, in case the browser blocked the automatic save -->
+        <button id="saveAgain" type="button"
+                class="file-link hidden fade-up mt-5 w-full flex items-center justify-center gap-2 font-bold py-3 px-4 rounded-xl transition-colors">
+            <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/></svg>
+            Save File
+        </button>
+    </div>
+
+    <!-- History: remembered in this browser only -->
+    <div id="historySection" class="hidden glass-card rounded-3xl shadow-2xl shadow-black/40 p-6 mt-5">
+        <div class="flex items-baseline justify-between mb-3">
+            <h3 class="text-sm font-bold">Recent downloads</h3>
+            <p class="text-xs text-faint">Files are kept for 24 hours.</p>
+        </div>
+        <ul id="historyList" class="space-y-2"></ul>
     </div>
 
     <p class="text-center text-xs text-faint mt-5">For personal use only · Respect creators' rights</p>
