@@ -238,3 +238,130 @@ def test_cookie_opts_valid_file(tmp_path, monkeypatch):
     path.write_text("# Netscape HTTP Cookie File\n")
     monkeypatch.setattr(downloader, "COOKIE_FILE", str(path))
     assert downloader._cookie_opts() == {"cookiefile": str(path)}
+
+
+# ---------- Audio quality ----------
+
+@pytest.mark.parametrize("quality", ["128", "192", "320"])
+def test_format_opts_audio_bitrates(quality):
+    """
+    Checks each MP3 bitrate is passed to the audio extractor.
+
+    Parameters:
+    quality (str): The chosen bitrate.
+    """
+    extract = downloader._format_opts("audio", None, audio_quality=quality)["postprocessors"][0]
+    assert extract["preferredcodec"] == "mp3"
+    assert extract["preferredquality"] == quality
+
+
+def test_format_opts_audio_m4a():
+    """Checks M4A picks an m4a stream and converts to m4a."""
+    opts = downloader._format_opts("audio", None, audio_quality="m4a")
+    assert opts["postprocessors"][0]["preferredcodec"] == "m4a"
+    assert "m4a" in opts["format"]
+
+
+def test_format_opts_audio_rejects_unknown():
+    """Checks an unknown audio quality is refused."""
+    with pytest.raises(ValueError):
+        downloader._format_opts("audio", None, audio_quality="999")
+
+
+# ---------- Trim ----------
+
+@pytest.mark.parametrize("text, expected", [
+    ("", None), (None, None), ("90", 90), ("1:30", 90),
+    ("1:02:03", 3723), ("0:05.5", 5.5), (" 2:00 ", 120),
+])
+def test_parse_timestamp(text, expected):
+    """
+    Checks seconds, m:ss and h:mm:ss are understood.
+
+    Parameters:
+    text (str/None): The typed time.
+    expected (float/None): Seconds.
+    """
+    assert downloader.parse_timestamp(text) == expected
+
+
+@pytest.mark.parametrize("text", ["abc", "-5", "1:75", "1::2", "1:2:3:4"])
+def test_parse_timestamp_invalid(text):
+    """
+    Checks malformed times are refused.
+
+    Parameters:
+    text (str): The typed time.
+    """
+    with pytest.raises(ValueError):
+        downloader.parse_timestamp(text)
+
+
+def test_validate_trim():
+    """Checks valid ranges pass through and an empty range means no trim."""
+    assert downloader.validate_trim(30, 75, 120) == (30, 75)
+    assert downloader.validate_trim(None, None, 120) is None
+    assert downloader.validate_trim(None, 60, None) == (None, 60)
+
+
+@pytest.mark.parametrize("start, end, duration", [(75, 30, 120), (30, 30, 120), (130, None, 120)])
+def test_validate_trim_rejects(start, end, duration):
+    """
+    Checks impossible ranges are refused.
+
+    Parameters:
+    start (float/None): Start seconds.
+    end (float/None): End seconds.
+    duration (float/None): Video length.
+    """
+    with pytest.raises(ValueError):
+        downloader.validate_trim(start, end, duration)
+
+
+def test_validate_trim_end_past_duration_is_ok():
+    """Checks an end past the video's length just means "to the end"."""
+    assert downloader.validate_trim(0, 5940, 120) == (0, 120)
+
+
+@pytest.fixture
+def capture_ydl_opts(tmp_path, monkeypatch):
+    """
+    Fakes yt-dlp and ffmpeg inside download_media and records the options used.
+
+    Parameters:
+    tmp_path (pathlib.Path): pytest's temp folder, used as out_dir.
+    monkeypatch (pytest.MonkeyPatch): pytest's patcher.
+
+    Returns:
+    dict: Filled with the yt-dlp options once download_media runs.
+    """
+    captured = {}
+
+    def fake_extract(opts, url, download):
+        captured.update(opts)
+        (tmp_path / "Clip.mp4").write_bytes(b"video")
+        return {"title": "Clip", "ext": "mp4"}, opts
+
+    monkeypatch.setattr(downloader, "extract_info_with_fallback", fake_extract)
+    monkeypatch.setattr(downloader, "normalize_for_social", lambda *a, **k: None)
+    monkeypatch.setattr(downloader, "_fetch_cover_art", lambda url, out_dir: None)
+    return captured
+
+
+def test_download_media_passes_trim_to_ytdlp(tmp_path, capture_ydl_opts):
+    """Checks a trim range makes yt-dlp download only that part."""
+    downloader.download_media("https://x", "video", str(tmp_path), trim=(30, 75))
+    assert "download_ranges" in capture_ydl_opts
+    assert capture_ydl_opts["force_keyframes_at_cuts"] is True
+
+
+def test_download_media_without_trim_downloads_everything(tmp_path, capture_ydl_opts):
+    """Checks no trim means no download range."""
+    downloader.download_media("https://x", "video", str(tmp_path))
+    assert "download_ranges" not in capture_ydl_opts
+
+
+def test_download_media_m4a_extension(tmp_path, capture_ydl_opts):
+    """Checks an M4A download returns a .m4a path."""
+    path = downloader.download_media("https://x", "audio", str(tmp_path), audio_quality="m4a")
+    assert path.endswith("Clip.m4a")
