@@ -5,6 +5,11 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.8.5] - 2026-10-12
+### Changed
+- The logo above the title uses a simple outline download icon instead
+  of an emoji.
+
 ## [0.8.4] - 2026-10-12
 ### Changed
 - The theme toggle (sun/moon) and the low-quality warning use simple
