@@ -28,6 +28,9 @@ COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.
 # TikTok always serves its watermarked stream under this format id
 TIKTOK_WATERMARK_FORMAT_ID = "download"
 
+# MP3 bitrates in kbps, or "m4a" for AAC in an m4a file
+AUDIO_QUALITIES = ("128", "192", "320", "m4a")
+
 # Bracketed junk in YouTube titles ("[Official Video]", "(Lyrics)") that hurts iTunes matching
 _TITLE_JUNK_RE = re.compile(
     r"""[\[(][^\])]*
@@ -163,6 +166,71 @@ def download_percent(d):
     return int(d.get('downloaded_bytes', 0) / total * 100)
 
 
+# ---------- Batch ----------
+
+BATCH_LIMIT = 50
+
+
+def _extract_playlist(url):
+    """
+    Lists a playlist's videos without downloading anything.
+
+    Parameters:
+    url (str): The playlist link.
+
+    Returns:
+    dict: yt-dlp's flat info dict, with "entries".
+    """
+    opts = {
+        'quiet': True, 'no_warnings': True, 'extract_flat': 'in_playlist',
+        # One past the limit is enough to know it's too long; huge playlists stay fast
+        'playlistend': BATCH_LIMIT + 1,
+        **_cookie_opts(),
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
+
+
+def expand_batch(text, limit=BATCH_LIMIT, extract=None):
+    """
+    Turns pasted links, and any playlist links among them, into a list of video links.
+
+    Parameters:
+    text (str): Links separated by spaces or new lines.
+    limit (int): Maximum number of videos.
+    extract (callable/None): Playlist lister, url -> info dict; defaults to yt-dlp.
+
+    Returns:
+    list: Unique video links, in the order given.
+
+    Raises:
+    ValueError: If there are no links, a playlist can't be read, or there
+        are more than limit links after expansion.
+    """
+    extract = extract or _extract_playlist
+    urls = []
+    for word in (text or "").split():
+        if not re.match(r"https?://", word, re.IGNORECASE):
+            continue
+        # A video opened from a playlist keeps its v= and stays one video
+        is_playlist = "/playlist" in word or ("list=" in word and not re.search(r"[?&]v=", word))
+        if is_playlist:
+            try:
+                entries = extract(word).get("entries") or []
+            except Exception:
+                raise ValueError(f"Couldn't read playlist: {word}")
+            urls.extend(e.get("url") or e.get("webpage_url") for e in entries if e)
+        else:
+            urls.append(word)
+
+    urls = list(dict.fromkeys(u for u in urls if u))
+    if not urls:
+        raise ValueError("No links found")
+    if len(urls) > limit:
+        raise ValueError(f"Too many links: {len(urls)} (max {limit})")
+    return urls
+
+
 # ---------- Formats and sizes ----------
 
 def _is_video_format(f):
@@ -284,26 +352,34 @@ def estimate_tiktok_size(info):
     return format_size(max(candidates, default=0))
 
 
-def _format_opts(dtype, resolution):
+def _format_opts(dtype, resolution, audio_quality="192"):
     """
     Builds the yt-dlp format options for a download type.
 
     Parameters:
     dtype (str): "audio", "tiktok" or "video".
     resolution (str/int/None): Max video height; None means best.
+    audio_quality (str): One of AUDIO_QUALITIES; only used for audio.
 
     Returns:
     dict: yt-dlp options to merge into the download options.
+
+    Raises:
+    ValueError: For an audio_quality not in AUDIO_QUALITIES.
     """
     if dtype == "audio":
+        if audio_quality not in AUDIO_QUALITIES:
+            raise ValueError(f"Unknown audio quality: {audio_quality}")
+        is_m4a = audio_quality == "m4a"
         return {
-            'format': 'bestaudio/best',
+            # m4a sources convert to m4a without re-encoding
+            'format': 'bestaudio[ext=m4a]/bestaudio/best' if is_m4a else 'bestaudio/best',
             'writethumbnail': False,
             'postprocessors': [
                 {
                     'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
+                    'preferredcodec': 'm4a' if is_m4a else 'mp3',
+                    'preferredquality': '192' if is_m4a else audio_quality,
                 },
                 {
                     'key': 'FFmpegMetadata',
@@ -326,6 +402,181 @@ def _format_opts(dtype, resolution):
         ),
         'merge_output_format': 'mp4',
     }
+
+
+# ---------- Trim ----------
+
+def parse_timestamp(text):
+    """
+    Converts a typed time like "90", "1:30" or "1:02:03" to seconds.
+
+    Parameters:
+    text (str/None): The time; blank means not set.
+
+    Returns:
+    float/None: Seconds, or None when blank.
+
+    Raises:
+    ValueError: If the text isn't a valid non-negative time.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) > 3 or not re.fullmatch(r"\d+(\.\d+)?", parts[-1]) or \
+            not all(p.isdigit() for p in parts[:-1]):
+        raise ValueError(f"Invalid time: {text}")
+    seconds = float(parts[-1])
+    # Seconds, and minutes in h:mm:ss, must be under 60
+    if (len(parts) > 1 and seconds >= 60) or (len(parts) == 3 and int(parts[1]) >= 60):
+        raise ValueError(f"Invalid time: {text}")
+    multiplier = 60
+    for part in reversed(parts[:-1]):
+        seconds += int(part) * multiplier
+        multiplier *= 60
+    return seconds
+
+
+def validate_trim(start, end, duration):
+    """
+    Checks a trim range against the video's length.
+
+    Parameters:
+    start (float/None): Start in seconds; None means the beginning.
+    end (float/None): End in seconds; None means the end.
+    duration (float/None): Video length in seconds, if known.
+
+    Returns:
+    tuple/None: (start, end) with end clamped to the duration, or None for no trim.
+
+    Raises:
+    ValueError: If end is not after start, or start is past the end of the video.
+    """
+    if start is None and end is None:
+        return None
+    if start is not None and end is not None and end <= start:
+        raise ValueError("The end time must be after the start time")
+    if duration:
+        if start is not None and start >= duration:
+            raise ValueError("The start time is past the end of the video")
+        if end is not None and end > duration:
+            end = duration
+    return (start, end)
+
+
+# ---------- Subtitles ----------
+
+_SRT_TIME_RE = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{3})")
+
+
+def get_subtitle_languages(info):
+    """
+    Lists the subtitle languages a video offers.
+
+    Manual tracks come first. Auto captions are limited to the video's own
+    language, since YouTube auto-translates into 100+ languages.
+
+    Parameters:
+    info (dict): yt-dlp info dict.
+
+    Returns:
+    list: {"code", "name", "auto"} dicts, each group sorted by name.
+    """
+    def entries(tracks, auto, keep):
+        found = []
+        for code, formats in (tracks or {}).items():
+            if code == "live_chat" or not keep(code):
+                continue
+            name = (formats[0].get("name") if formats else None) or code
+            found.append({"code": code, "name": name, "auto": auto})
+        return sorted(found, key=lambda t: t["name"])
+
+    language = info.get("language")
+
+    def is_original(code):
+        return code == language if language else code.endswith("-orig")
+
+    return (entries(info.get("subtitles"), False, lambda code: True)
+            + entries(info.get("automatic_captions"), True, is_original))
+
+
+def subtitle_path_for(video_path, lang):
+    """
+    Gets where yt-dlp saves a video's converted subtitles.
+
+    Parameters:
+    video_path (str): Path of the video.
+    lang (str): Subtitle language code.
+
+    Returns:
+    str: e.g. "/d/Clip.km.srt" for "/d/Clip.mp4".
+    """
+    return f"{os.path.splitext(video_path)[0]}.{lang}.srt"
+
+
+def _srt_seconds(stamp):
+    """
+    Converts an SRT timestamp to seconds.
+
+    Parameters:
+    stamp (str): e.g. "00:01:02,500".
+
+    Returns:
+    float: Seconds.
+    """
+    h, m, sec, ms = (int(x) for x in _SRT_TIME_RE.match(stamp.strip()).groups())
+    return h * 3600 + m * 60 + sec + ms / 1000
+
+
+def _srt_stamp(seconds):
+    """
+    Converts seconds to an SRT timestamp.
+
+    Parameters:
+    seconds (float): Seconds.
+
+    Returns:
+    str: e.g. "00:01:02,500".
+    """
+    ms = int(round(seconds * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    sec, ms = divmod(ms, 1000)
+    return f"{h:02}:{m:02}:{sec:02},{ms:03}"
+
+
+def shift_srt(path, start, end):
+    """
+    Rewrites an .srt so its times line up with a trimmed clip, in place.
+
+    Cues outside the clip are dropped; cues crossing its edges are clamped.
+
+    Parameters:
+    path (str): Path of the .srt.
+    start (float/None): Clip start in the original video; None means 0.
+    end (float/None): Clip end in the original video; None means the end.
+    """
+    start = start or 0
+    with open(path, encoding="utf-8", errors="replace") as f:
+        blocks = re.split(r"\n\s*\n", f.read().replace("\r\n", "\n").strip())
+
+    kept = []
+    for block in blocks:
+        lines = block.split("\n")
+        time_index = next((i for i, line in enumerate(lines) if "-->" in line), None)
+        if time_index is None:
+            continue
+        first, last = lines[time_index].split("-->")
+        cue_start, cue_end = _srt_seconds(first), _srt_seconds(last)
+        if cue_end <= start or (end is not None and cue_start >= end):
+            continue
+        new_start = max(0, cue_start - start)
+        new_end = cue_end - start if end is None else min(cue_end, end) - start
+        text = "\n".join(lines[time_index + 1:])
+        kept.append(f"{len(kept) + 1}\n{_srt_stamp(new_start)} --> {_srt_stamp(new_end)}\n{text}\n")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(kept))
 
 
 # ---------- Cover art (audio) ----------
@@ -462,29 +713,35 @@ def _fetch_cover_art(url, out_dir):
         return None
 
 
-def _embed_cover_art(mp3_path, thumb_path):
+def _embed_cover_art(audio_path, thumb_path):
     """
-    Embeds an image as the mp3's front cover, in place.
+    Embeds an image as the mp3 or m4a's front cover, in place.
 
     Parameters:
-    mp3_path (str): Path of the mp3.
+    audio_path (str): Path of the mp3 or m4a.
     thumb_path (str): Path of the cover image.
     """
-    tmp_path = os.path.join(os.path.dirname(mp3_path), f"final_{os.path.basename(mp3_path)}")
-    result = subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", mp3_path, "-i", thumb_path,
-            "-map", "0:0", "-map", "1:0",
-            "-c:a", "copy",
-            "-c:v", "mjpeg",
+    tmp_path = os.path.join(os.path.dirname(audio_path), f"final_{os.path.basename(audio_path)}")
+    if audio_path.lower().endswith(".m4a"):
+        cover_args = ["-disposition:v:0", "attached_pic"]
+    else:
+        cover_args = [
             "-id3v2_version", "3",
             "-metadata:s:v", "title=Album cover",
             "-metadata:s:v", "comment=Cover (front)",
+        ]
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", audio_path, "-i", thumb_path,
+            "-map", "0:0", "-map", "1:0",
+            "-c:a", "copy",
+            "-c:v", "mjpeg",
+            *cover_args,
             tmp_path,
         ],
         capture_output=True,
     )
-    _swap_in(tmp_path, mp3_path, result.returncode == 0)
+    _swap_in(tmp_path, audio_path, result.returncode == 0)
 
 
 # ---------- ffprobe / ffmpeg ----------
@@ -640,7 +897,7 @@ def _swap_in(tmp_path, path, ok):
     return False
 
 
-def normalize_for_social(path, progress_hook=None, max_height=None):
+def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitles=None):
     """
     Makes a video safe to post on Instagram/TikTok/Facebook, in place.
 
@@ -653,6 +910,11 @@ def normalize_for_social(path, progress_hook=None, max_height=None):
     path (str): Path of the video.
     progress_hook (callable/None): Receives {"status": "normalizing", "percent": int}.
     max_height (str/int/None): Downscales taller videos, forcing a re-encode.
+    burn_subtitles (str/None): Path of an .srt to draw onto the picture, forcing a re-encode.
+
+    Returns:
+    bool: False if a needed re-encode (or the subtitle burn) failed and the
+    original was kept; True otherwise.
     """
     def report(percent):
         if progress_hook:
@@ -663,7 +925,7 @@ def normalize_for_social(path, progress_hook=None, max_height=None):
         height = _get_height(path)
         needs_downscale = height is not None and height > int(max_height)
 
-    if _already_social_safe(path) and not needs_downscale:
+    if _already_social_safe(path) and not needs_downscale and not burn_subtitles:
         tmp_path = path + ".faststart.mp4"
         try:
             result = subprocess.run(
@@ -675,14 +937,32 @@ def normalize_for_social(path, progress_hook=None, max_height=None):
             print("Fast-start remux failed, keeping original file:", e)
             _remove_if_exists(tmp_path)
         report(100)
-        return
+        # The original was already social-safe, so a failed remux loses nothing
+        return True
 
+    path = os.path.abspath(path)
     fps = _get_source_fps(path)
     duration = _get_duration_seconds(path)
     tmp_path = path + ".normalized.mp4"
-    scale_args = ["-vf", f"scale=-2:'min(ih,{int(max_height)})'"] if needs_downscale else []
+
+    filters = [f"scale=-2:'min(ih,{int(max_height)})'"] if needs_downscale else []
+    burn_copy = None
+    if burn_subtitles:
+        # The ass filter (unlike subtitles) can force complex shaping, without
+        # which Khmer vowel signs render as loose glyphs. A plain file name in
+        # ffmpeg's working folder needs no filter escaping.
+        burn_copy = os.path.join(os.path.dirname(path), "burn_subs.ass")
+        filters.append("ass=burn_subs.ass:shaping=complex")
+    scale_args = ["-vf", ",".join(filters)] if filters else []
 
     try:
+        if burn_copy:
+            converted = subprocess.run(["ffmpeg", "-y", "-i", burn_subtitles, burn_copy],
+                                       capture_output=True, timeout=60)
+            if converted.returncode != 0 or not os.path.exists(burn_copy):
+                print("Subtitle conversion failed:", (converted.stderr or b"")[-500:])
+                return False
+
         process = subprocess.Popen(
             [
                 "ffmpeg", "-y", "-i", path,
@@ -696,6 +976,7 @@ def normalize_for_social(path, progress_hook=None, max_height=None):
                 tmp_path,
             ],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=os.path.dirname(path),
         )
 
         if progress_hook and duration:
@@ -716,19 +997,25 @@ def normalize_for_social(path, progress_hook=None, max_height=None):
 
         if _swap_in(tmp_path, path, process.returncode == 0):
             report(100)
-        else:
-            print(
-                "Social-media normalization failed, keeping original file:",
-                (stderr or "")[-500:],
-            )
+            return True
+        print(
+            "Social-media normalization failed, keeping original file:",
+            (stderr or "")[-500:],
+        )
+        return False
     except Exception as e:
         print("Social-media normalization failed, keeping original file:", e)
         _remove_if_exists(tmp_path)
+        return False
+    finally:
+        if burn_copy:
+            _remove_if_exists(burn_copy)
 
 
 # ---------- Download ----------
 
-def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
+def download_media(url, dtype, out_dir, progress_hook=None, resolution=None,
+                   audio_quality="192", trim=None, subtitles=None):
     """
     Downloads a video or its audio.
 
@@ -738,13 +1025,19 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     out_dir (str): Folder to save the file in.
     progress_hook (callable/None): Receives yt-dlp progress dicts, then "normalizing" updates.
     resolution (str/int/None): Max height for video and TikTok; None means best.
+    audio_quality (str): One of AUDIO_QUALITIES, for audio downloads.
+    trim (tuple/None): (start, end) seconds from validate_trim(); either may be None.
+    subtitles (dict/None): {"lang": code, "mode": "srt" or "burn"}; ignored for audio.
+        The .srt (mode "srt") is saved at subtitle_path_for(returned path, lang).
 
     Returns:
     str: Path of the downloaded file.
 
     Raises:
     yt_dlp.utils.DownloadError: If the download fails.
-    ValueError: For TikTok photo posts, which yt-dlp can't download.
+    ValueError: For TikTok photo posts, which yt-dlp can't download, or
+        when burn-in subtitles were asked for but none exist in that
+        language or burning them failed.
     """
     if is_tiktok(url) and "/photo/" in url.lower():
         raise ValueError(
@@ -759,8 +1052,26 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
         'quiet': True,
         'no_warnings': True,
         **_cookie_opts(),
-        **_format_opts(dtype, resolution),
+        **_format_opts(dtype, resolution, audio_quality),
     }
+    if trim:
+        start, end = trim
+        # Only the chosen part is downloaded; cuts snap to re-encoded keyframes
+        ydl_opts['download_ranges'] = yt_dlp.utils.download_range_func(
+            None, [(start or 0, end if end is not None else float("inf"))]
+        )
+        ydl_opts['force_keyframes_at_cuts'] = True
+    if dtype == "audio":
+        subtitles = None
+    if subtitles:
+        ydl_opts.update(
+            writesubtitles=True,
+            writeautomaticsub=True,
+            subtitleslangs=[subtitles["lang"]],
+        )
+        ydl_opts.setdefault('postprocessors', []).append(
+            {'key': 'FFmpegSubtitlesConvertor', 'format': 'srt'}
+        )
     if progress_hook:
         ydl_opts['progress_hooks'] = [progress_hook]
 
@@ -772,7 +1083,7 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     with yt_dlp.YoutubeDL(effective_opts) as ydl:
         filename = os.path.basename(ydl.prepare_filename(info))
     if dtype == "audio":
-        filename = os.path.splitext(filename)[0] + ".mp3"
+        filename = os.path.splitext(filename)[0] + (".m4a" if audio_quality == "m4a" else ".mp3")
     final_path = os.path.join(out_dir, filename)
 
     if thumb_path and os.path.exists(final_path):
@@ -780,8 +1091,24 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     if thumb_path:
         _remove_if_exists(thumb_path)
 
+    srt_path = subtitle_path_for(final_path, subtitles["lang"]) if subtitles else None
+    if srt_path and trim and os.path.exists(srt_path):
+        # Subtitles always cover the whole video; move them to the clip's timeline
+        shift_srt(srt_path, *trim)
+    burn_path = None
+    if subtitles and subtitles["mode"] == "burn":
+        if not os.path.exists(srt_path):
+            raise ValueError("No subtitles found for that language")
+        burn_path = srt_path
+
     if dtype in ("video", "tiktok") and os.path.exists(final_path):
         # Also caps TikTok, whose format string has no height filter
-        normalize_for_social(final_path, progress_hook=progress_hook, max_height=resolution)
+        normalized = normalize_for_social(final_path, progress_hook=progress_hook,
+                                          max_height=resolution, burn_subtitles=burn_path)
+        if burn_path and not normalized:
+            _remove_if_exists(burn_path)
+            raise ValueError("Couldn't burn the subtitles into the video")
+    if burn_path:
+        _remove_if_exists(burn_path)
 
     return final_path

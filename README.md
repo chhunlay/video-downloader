@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.8.6-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -12,7 +12,7 @@
 [![FFmpeg](https://img.shields.io/badge/FFmpeg-required-007808?logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
 [![Last commit](https://img.shields.io/github/last-commit/chhunlay/video-downloader)](https://github.com/chhunlay/video-downloader/commits)
 
-[Setup](#setup) · [Web app](#running-the-web-app) · [Telegram bot](#running-the-telegram-bot) · [Instagram / Facebook](#instagram--facebook-links) · [Tests](#running-the-tests) · [Changelog](CHANGELOG.md)
+[Features](#features) · [Setup](#setup) · [Web app](#running-the-web-app) · [Telegram bot](#running-the-telegram-bot) · [Instagram / Facebook](#instagram--facebook-links) · [Tests](#running-the-tests) · [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -22,6 +22,23 @@ same `downloader.py`. Downloaded video/TikTok clips are automatically
 re-encoded to be safe to re-post on Instagram, TikTok, and Facebook -
 fixing the choppy playback and slow uploads you get from posting a raw
 downloaded file directly.
+
+## Features
+
+Web app:
+
+- **Video, audio or TikTok without watermark**, with a resolution picker
+  showing each option's size.
+- **Audio quality** - MP3 at 128, 192 or 320 kbps, or M4A, with cover art.
+- **Trim** - type a start and/or end time (`90`, `1:30`, `1:02:03`) and
+  only that part is downloaded.
+- **Subtitles** - pick a language the video offers, then save it as an
+  `.srt` next to the video or burn it into the picture (Khmer included).
+- **Batch / playlist** - paste up to 50 links, or a playlist link, and
+  get them back as one `.zip`. Links that fail are skipped and listed.
+- **Recent downloads** - each browser keeps its own history, so you can
+  save a file again or delete it. Files are kept on the server for
+  24 hours, then removed automatically.
 
 ## Requirements
 
@@ -46,7 +63,9 @@ python app.py
 ```
 
 Open **http://localhost:5050**. Paste a link, pick a type (video/audio/
-TikTok) and resolution, and download.
+TikTok) and resolution, and download. Open **Options** for trim, audio
+quality and subtitles, or switch to **Batch** for several links.
+Downloads are stored in `app/downloads/<job id>/` for 24 hours.
 
 ## Running the Telegram bot
 
@@ -87,8 +106,8 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The tests cover the download helpers, the web app routes and the bot's
-text helpers. yt-dlp, ffmpeg and the network are faked, so the whole
+The tests cover the download helpers (formats, trim, subtitles, batch
+links), the job store, the web app routes and the bot's text helpers. yt-dlp, ffmpeg and the network are faked, so the whole
 suite runs offline in under a second.
 
 ## Building a standalone Windows app
@@ -102,10 +121,12 @@ PyInstaller) - no Python install needed on the machine that runs it.
 ```
 app/
   app.py                 Flask web app
+  jobs.py                Per-download jobs: one folder + job.json each, 24 h cleanup
   telegram_bot.py        Telegram bot
   downloader.py          Shared yt-dlp/ffmpeg download + re-encode logic
   desktop_app.py         pywebview wrapper for the Windows build
   templates/index.html   Web app UI
+  static/                Web app script and styles
   tests/                 pytest suite (run from app/)
 legacy/
   tiktok_downloader.py, youtube_downloader.py, youtube_downloader_v2.py
