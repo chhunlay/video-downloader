@@ -5,6 +5,14 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.8.6] - 2026-10-12
+### Added
+- Automated tests (pytest, 54 tests) for the download helpers, the web
+  app routes and the Telegram bot's text helpers. They fake yt-dlp,
+  ffmpeg and the network, so they run offline in under a second.
+- `requirements-dev.txt` for the test tools, and a "Running the tests"
+  section in the README.
+
 ## [0.8.5] - 2026-10-12
 ### Changed
 - The logo above the title uses a simple outline download icon instead
