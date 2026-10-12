@@ -21,7 +21,11 @@ meaningful batch of work its own entry.
   Delete; expired downloads are marked as such.
 - Job system (`app/jobs.py`): every download gets its own folder and
   progress, survives a server restart, and is cleaned up after 24 hours.
-- Tests for all of the above (127 tests).
+- Safety limits for the public link: at most 2 downloads run at once
+  (others wait as queued), new downloads are refused when the server has
+  under 2 GB free, and deleting a running download stops it and frees
+  its files.
+- Tests for all of the above (148 tests).
 
 ### Changed
 - Files stay available for 24 hours instead of being deleted after the
