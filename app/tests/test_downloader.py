@@ -365,3 +365,151 @@ def test_download_media_m4a_extension(tmp_path, capture_ydl_opts):
     """Checks an M4A download returns a .m4a path."""
     path = downloader.download_media("https://x", "audio", str(tmp_path), audio_quality="m4a")
     assert path.endswith("Clip.m4a")
+
+
+# ---------- Subtitles ----------
+
+def test_get_subtitle_languages():
+    """Checks manual tracks come first, and only original-language auto captions are offered."""
+    info = {
+        "language": "en",
+        "subtitles": {"km": [{"name": "Khmer"}], "en": [{"name": "English"}], "live_chat": [{}]},
+        "automatic_captions": {"en": [{"name": "English"}], "fr": [{"name": "French"}]},
+    }
+    assert downloader.get_subtitle_languages(info) == [
+        {"code": "en", "name": "English", "auto": False},
+        {"code": "km", "name": "Khmer", "auto": False},
+        {"code": "en", "name": "English", "auto": True},
+    ]
+
+
+def test_get_subtitle_languages_orig_track_without_language():
+    """Checks "-orig" auto tracks are offered when the video's language is unknown."""
+    info = {"automatic_captions": {"km-orig": [{"name": "Khmer (Original)"}], "de": [{}]}}
+    assert downloader.get_subtitle_languages(info) == [
+        {"code": "km-orig", "name": "Khmer (Original)", "auto": True},
+    ]
+
+
+def test_get_subtitle_languages_empty():
+    """Checks a video without subtitles gives an empty list."""
+    assert downloader.get_subtitle_languages({}) == []
+
+
+def test_subtitle_path_for():
+    """Checks the .srt sits next to the video with the language in its name."""
+    assert downloader.subtitle_path_for("/d/Clip.mp4", "km") == "/d/Clip.km.srt"
+
+
+SRT = """1
+00:00:10,000 --> 00:00:12,500
+first
+
+2
+00:00:31,000 --> 00:00:33,000
+second
+line two
+
+3
+00:01:20,000 --> 00:01:22,000
+third
+"""
+
+
+def test_shift_srt_moves_cues_and_drops_outside(tmp_path):
+    """Checks a trimmed clip's subtitles start from the trim point."""
+    path = tmp_path / "a.srt"
+    path.write_text(SRT, encoding="utf-8")
+    downloader.shift_srt(str(path), start=30, end=75)
+    assert path.read_text(encoding="utf-8") == (
+        "1\n00:00:01,000 --> 00:00:03,000\nsecond\nline two\n"
+    )
+
+
+def test_shift_srt_clamps_cue_crossing_start(tmp_path):
+    """Checks a cue that began before the trim point starts at 0 instead of being lost."""
+    path = tmp_path / "a.srt"
+    path.write_text(SRT, encoding="utf-8")
+    downloader.shift_srt(str(path), start=11, end=None)
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("1\n00:00:00,000 --> 00:00:01,500\nfirst\n")
+    assert "3\n00:01:09,000 --> 00:01:11,000\nthird\n" in text
+
+
+def test_download_media_subtitle_opts(tmp_path, capture_ydl_opts):
+    """Checks subtitle options are passed to yt-dlp and converted to srt."""
+    downloader.download_media("https://x", "video", str(tmp_path),
+                              subtitles={"lang": "km", "mode": "srt"})
+    assert capture_ydl_opts["subtitleslangs"] == ["km"]
+    assert capture_ydl_opts["writesubtitles"] is True
+    assert capture_ydl_opts["writeautomaticsub"] is True
+    keys = [p["key"] for p in capture_ydl_opts.get("postprocessors", [])]
+    assert "FFmpegSubtitlesConvertor" in keys
+
+
+def test_download_media_audio_ignores_subtitles(tmp_path, capture_ydl_opts):
+    """Checks audio downloads never ask for subtitles."""
+    downloader.download_media("https://x", "audio", str(tmp_path),
+                              subtitles={"lang": "km", "mode": "srt"})
+    assert "subtitleslangs" not in capture_ydl_opts
+
+
+def test_burn_without_subtitle_file_fails(tmp_path, capture_ydl_opts):
+    """Checks burn-in fails clearly when the language produced no subtitle file."""
+    with pytest.raises(ValueError, match="No subtitles"):
+        downloader.download_media("https://x", "video", str(tmp_path),
+                                  subtitles={"lang": "km", "mode": "burn"})
+
+
+def test_burn_passes_subtitle_to_normalize(tmp_path, capture_ydl_opts, monkeypatch):
+    """Checks the .srt is burned during the social re-encode and then removed."""
+    srt = tmp_path / "Clip.km.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    calls = {}
+    monkeypatch.setattr(downloader, "normalize_for_social",
+                        lambda path, **k: calls.update(k))
+    downloader.download_media("https://x", "video", str(tmp_path),
+                              subtitles={"lang": "km", "mode": "burn"})
+    assert calls["burn_subtitles"] == str(srt)
+    assert not srt.exists()
+
+
+def test_trim_shifts_saved_subtitles(tmp_path, capture_ydl_opts):
+    """Checks an .srt saved with a trimmed clip lines up with the clip."""
+    srt = tmp_path / "Clip.km.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    downloader.download_media("https://x", "video", str(tmp_path), trim=(30, 75),
+                              subtitles={"lang": "km", "mode": "srt"})
+    assert srt.read_text(encoding="utf-8").startswith("1\n00:00:01,000 --> 00:00:03,000\n")
+
+
+def test_burn_uses_complex_shaping(tmp_path, monkeypatch):
+    """Checks burn-in uses libass complex shaping, which Khmer vowel signs need."""
+    video = tmp_path / "Clip.mp4"
+    video.write_bytes(b"video")
+    srt = tmp_path / "Clip.km.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    monkeypatch.setattr(downloader, "_already_social_safe", lambda path: True)
+    monkeypatch.setattr(downloader, "_get_source_fps", lambda path: "30")
+    monkeypatch.setattr(downloader, "_get_duration_seconds", lambda path: None)
+    monkeypatch.setattr(downloader.subprocess, "run",
+                        lambda args, **k: type("R", (), {"returncode": 0})())
+    commands = []
+
+    class FakePopen:
+        """Records the ffmpeg command and reports failure, so the original is kept."""
+
+        returncode = 1
+        stdout = iter(())
+
+        def __init__(self, args, **kwargs):
+            commands.append(args)
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+    monkeypatch.setattr(downloader.subprocess, "Popen", FakePopen)
+    downloader.normalize_for_social(str(video), burn_subtitles=str(srt))
+    vf = commands[0][commands[0].index("-vf") + 1]
+    assert "ass=burn_subs.ass:shaping=complex" in vf
+    assert not (tmp_path / "burn_subs.ass").exists()
