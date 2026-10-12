@@ -181,7 +181,12 @@ def _extract_playlist(url):
     Returns:
     dict: yt-dlp's flat info dict, with "entries".
     """
-    opts = {'quiet': True, 'no_warnings': True, 'extract_flat': 'in_playlist', **_cookie_opts()}
+    opts = {
+        'quiet': True, 'no_warnings': True, 'extract_flat': 'in_playlist',
+        # One past the limit is enough to know it's too long; huge playlists stay fast
+        'playlistend': BATCH_LIMIT + 1,
+        **_cookie_opts(),
+    }
     with yt_dlp.YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False)
 
@@ -199,15 +204,21 @@ def expand_batch(text, limit=BATCH_LIMIT, extract=None):
     list: Unique video links, in the order given.
 
     Raises:
-    ValueError: If there are no links, or more than limit after expansion.
+    ValueError: If there are no links, a playlist can't be read, or there
+        are more than limit links after expansion.
     """
     extract = extract or _extract_playlist
     urls = []
     for word in (text or "").split():
         if not re.match(r"https?://", word, re.IGNORECASE):
             continue
-        if "list=" in word or "/playlist" in word:
-            entries = extract(word).get("entries") or []
+        # A video opened from a playlist keeps its v= and stays one video
+        is_playlist = "/playlist" in word or ("list=" in word and not re.search(r"[?&]v=", word))
+        if is_playlist:
+            try:
+                entries = extract(word).get("entries") or []
+            except Exception:
+                raise ValueError(f"Couldn't read playlist: {word}")
             urls.extend(e.get("url") or e.get("webpage_url") for e in entries if e)
         else:
             urls.append(word)
@@ -900,6 +911,10 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
     progress_hook (callable/None): Receives {"status": "normalizing", "percent": int}.
     max_height (str/int/None): Downscales taller videos, forcing a re-encode.
     burn_subtitles (str/None): Path of an .srt to draw onto the picture, forcing a re-encode.
+
+    Returns:
+    bool: False if a needed re-encode (or the subtitle burn) failed and the
+    original was kept; True otherwise.
     """
     def report(percent):
         if progress_hook:
@@ -922,7 +937,8 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
             print("Fast-start remux failed, keeping original file:", e)
             _remove_if_exists(tmp_path)
         report(100)
-        return
+        # The original was already social-safe, so a failed remux loses nothing
+        return True
 
     path = os.path.abspath(path)
     fps = _get_source_fps(path)
@@ -936,12 +952,17 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
         # which Khmer vowel signs render as loose glyphs. A plain file name in
         # ffmpeg's working folder needs no filter escaping.
         burn_copy = os.path.join(os.path.dirname(path), "burn_subs.ass")
-        subprocess.run(["ffmpeg", "-y", "-i", burn_subtitles, burn_copy],
-                       capture_output=True, timeout=60)
         filters.append("ass=burn_subs.ass:shaping=complex")
     scale_args = ["-vf", ",".join(filters)] if filters else []
 
     try:
+        if burn_copy:
+            converted = subprocess.run(["ffmpeg", "-y", "-i", burn_subtitles, burn_copy],
+                                       capture_output=True, timeout=60)
+            if converted.returncode != 0 or not os.path.exists(burn_copy):
+                print("Subtitle conversion failed:", (converted.stderr or b"")[-500:])
+                return False
+
         process = subprocess.Popen(
             [
                 "ffmpeg", "-y", "-i", path,
@@ -976,14 +997,16 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
 
         if _swap_in(tmp_path, path, process.returncode == 0):
             report(100)
-        else:
-            print(
-                "Social-media normalization failed, keeping original file:",
-                (stderr or "")[-500:],
-            )
+            return True
+        print(
+            "Social-media normalization failed, keeping original file:",
+            (stderr or "")[-500:],
+        )
+        return False
     except Exception as e:
         print("Social-media normalization failed, keeping original file:", e)
         _remove_if_exists(tmp_path)
+        return False
     finally:
         if burn_copy:
             _remove_if_exists(burn_copy)
@@ -1013,7 +1036,8 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None,
     Raises:
     yt_dlp.utils.DownloadError: If the download fails.
     ValueError: For TikTok photo posts, which yt-dlp can't download, or
-        when burn-in subtitles were asked for but none exist in that language.
+        when burn-in subtitles were asked for but none exist in that
+        language or burning them failed.
     """
     if is_tiktok(url) and "/photo/" in url.lower():
         raise ValueError(
@@ -1079,8 +1103,11 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None,
 
     if dtype in ("video", "tiktok") and os.path.exists(final_path):
         # Also caps TikTok, whose format string has no height filter
-        normalize_for_social(final_path, progress_hook=progress_hook, max_height=resolution,
-                             burn_subtitles=burn_path)
+        normalized = normalize_for_social(final_path, progress_hook=progress_hook,
+                                          max_height=resolution, burn_subtitles=burn_path)
+        if burn_path and not normalized:
+            _remove_if_exists(burn_path)
+            raise ValueError("Couldn't burn the subtitles into the video")
     if burn_path:
         _remove_if_exists(burn_path)
 
