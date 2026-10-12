@@ -67,6 +67,11 @@ TikTok) and resolution, and download. Open **Options** for trim, audio
 quality and subtitles, or switch to **Batch** for several links.
 Downloads are stored in `app/downloads/<job id>/` for 24 hours.
 
+If [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+is installed (`brew install cloudflared`), the app also opens one public
+`*.trycloudflare.com` link, printed at startup, and closes it when the app
+stops. The server doesn't auto-reload: restart it after changing the code.
+
 ## Running the Telegram bot
 
 1. Message [@BotFather](https://t.me/BotFather) on Telegram, send
