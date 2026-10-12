@@ -589,3 +589,106 @@ def test_download_refused_when_disk_is_low(client, tmp_path, monkeypatch):
     response = start(client)
     assert response.status_code == 503
     assert os.listdir(tmp_path) == []
+
+
+# ---------- Startup and tunnel ----------
+
+class FakeTunnel:
+    """Stands in for the cloudflared process."""
+
+    def __init__(self, args, **kwargs):
+        """
+        Records the command.
+
+        Parameters:
+        args (list): The command line.
+        **kwargs: Ignored Popen options.
+        """
+        self.args = args
+        self.terminated = False
+
+    def terminate(self):
+        """Marks the tunnel as stopped."""
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        """
+        Pretends the process exited.
+
+        Parameters:
+        timeout (float/None): Ignored.
+
+        Returns:
+        int: 0.
+        """
+        return 0
+
+
+@pytest.fixture
+def fake_startup(monkeypatch, store):
+    """
+    Fakes cloudflared, the web server and signal setup so main() can run in a test.
+
+    Parameters:
+    monkeypatch (pytest.MonkeyPatch): pytest's patcher.
+    store (JobStore): The temp store fixture.
+
+    Returns:
+    dict: "tunnels" (FakeTunnel list), "run" (app.run kwargs) and "signals" (handlers set).
+    """
+    seen = {"tunnels": [], "run": {}, "signals": {}}
+
+    def fake_popen(args, **kwargs):
+        tunnel = FakeTunnel(args, **kwargs)
+        seen["tunnels"].append(tunnel)
+        return tunnel
+
+    monkeypatch.setattr(webapp.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(webapp.app, "run", lambda **kwargs: seen["run"].update(kwargs))
+    monkeypatch.setattr(webapp.signal, "signal",
+                        lambda signum, handler: seen["signals"].__setitem__(signum, handler))
+    monkeypatch.setattr(store, "start_cleanup_thread", lambda: None)
+    return seen
+
+
+def test_main_runs_without_debug_or_reloader(fake_startup):
+    """Checks the server runs with no debugger and no auto-reloader, which spawned extra tunnels."""
+    webapp.main()
+    assert fake_startup["run"]["debug"] is False
+    assert fake_startup["run"]["use_reloader"] is False
+    assert fake_startup["run"]["port"] == 5050
+
+
+def test_main_starts_one_tunnel_and_stops_it(fake_startup):
+    """Checks exactly one tunnel starts and it is closed when the server stops."""
+    webapp.main()
+    assert len(fake_startup["tunnels"]) == 1
+    assert fake_startup["tunnels"][0].args == ["cloudflared", "tunnel", "--url", "http://localhost:5050"]
+    assert fake_startup["tunnels"][0].terminated
+
+
+def test_main_stops_tunnel_on_ctrl_c(fake_startup, monkeypatch):
+    """Checks Ctrl+C still closes the tunnel."""
+    def interrupted(**kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(webapp.app, "run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        webapp.main()
+    assert fake_startup["tunnels"][0].terminated
+
+
+def test_sigterm_exits_cleanly(fake_startup):
+    """Checks `kill` turns into a normal exit, so the tunnel cleanup runs."""
+    webapp.main()
+    handler = fake_startup["signals"][webapp.signal.SIGTERM]
+    with pytest.raises(SystemExit):
+        handler(webapp.signal.SIGTERM, None)
+
+
+def test_main_without_cloudflared_still_serves(fake_startup, monkeypatch):
+    """Checks a missing cloudflared only skips the public link."""
+    def missing(args, **kwargs):
+        raise FileNotFoundError("cloudflared")
+    monkeypatch.setattr(webapp.subprocess, "Popen", missing)
+    webapp.main()
+    assert fake_startup["run"]["port"] == 5050
