@@ -28,6 +28,9 @@ COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.
 # TikTok always serves its watermarked stream under this format id
 TIKTOK_WATERMARK_FORMAT_ID = "download"
 
+# MP3 bitrates in kbps, or "m4a" for AAC in an m4a file
+AUDIO_QUALITIES = ("128", "192", "320", "m4a")
+
 # Bracketed junk in YouTube titles ("[Official Video]", "(Lyrics)") that hurts iTunes matching
 _TITLE_JUNK_RE = re.compile(
     r"""[\[(][^\])]*
@@ -284,26 +287,34 @@ def estimate_tiktok_size(info):
     return format_size(max(candidates, default=0))
 
 
-def _format_opts(dtype, resolution):
+def _format_opts(dtype, resolution, audio_quality="192"):
     """
     Builds the yt-dlp format options for a download type.
 
     Parameters:
     dtype (str): "audio", "tiktok" or "video".
     resolution (str/int/None): Max video height; None means best.
+    audio_quality (str): One of AUDIO_QUALITIES; only used for audio.
 
     Returns:
     dict: yt-dlp options to merge into the download options.
+
+    Raises:
+    ValueError: For an audio_quality not in AUDIO_QUALITIES.
     """
     if dtype == "audio":
+        if audio_quality not in AUDIO_QUALITIES:
+            raise ValueError(f"Unknown audio quality: {audio_quality}")
+        is_m4a = audio_quality == "m4a"
         return {
-            'format': 'bestaudio/best',
+            # m4a sources convert to m4a without re-encoding
+            'format': 'bestaudio[ext=m4a]/bestaudio/best' if is_m4a else 'bestaudio/best',
             'writethumbnail': False,
             'postprocessors': [
                 {
                     'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
+                    'preferredcodec': 'm4a' if is_m4a else 'mp3',
+                    'preferredquality': '192' if is_m4a else audio_quality,
                 },
                 {
                     'key': 'FFmpegMetadata',
@@ -326,6 +337,66 @@ def _format_opts(dtype, resolution):
         ),
         'merge_output_format': 'mp4',
     }
+
+
+# ---------- Trim ----------
+
+def parse_timestamp(text):
+    """
+    Converts a typed time like "90", "1:30" or "1:02:03" to seconds.
+
+    Parameters:
+    text (str/None): The time; blank means not set.
+
+    Returns:
+    float/None: Seconds, or None when blank.
+
+    Raises:
+    ValueError: If the text isn't a valid non-negative time.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) > 3 or not re.fullmatch(r"\d+(\.\d+)?", parts[-1]) or \
+            not all(p.isdigit() for p in parts[:-1]):
+        raise ValueError(f"Invalid time: {text}")
+    seconds = float(parts[-1])
+    # Seconds, and minutes in h:mm:ss, must be under 60
+    if (len(parts) > 1 and seconds >= 60) or (len(parts) == 3 and int(parts[1]) >= 60):
+        raise ValueError(f"Invalid time: {text}")
+    multiplier = 60
+    for part in reversed(parts[:-1]):
+        seconds += int(part) * multiplier
+        multiplier *= 60
+    return seconds
+
+
+def validate_trim(start, end, duration):
+    """
+    Checks a trim range against the video's length.
+
+    Parameters:
+    start (float/None): Start in seconds; None means the beginning.
+    end (float/None): End in seconds; None means the end.
+    duration (float/None): Video length in seconds, if known.
+
+    Returns:
+    tuple/None: (start, end) with end clamped to the duration, or None for no trim.
+
+    Raises:
+    ValueError: If end is not after start, or start is past the end of the video.
+    """
+    if start is None and end is None:
+        return None
+    if start is not None and end is not None and end <= start:
+        raise ValueError("The end time must be after the start time")
+    if duration:
+        if start is not None and start >= duration:
+            raise ValueError("The start time is past the end of the video")
+        if end is not None and end > duration:
+            end = duration
+    return (start, end)
 
 
 # ---------- Cover art (audio) ----------
@@ -462,29 +533,35 @@ def _fetch_cover_art(url, out_dir):
         return None
 
 
-def _embed_cover_art(mp3_path, thumb_path):
+def _embed_cover_art(audio_path, thumb_path):
     """
-    Embeds an image as the mp3's front cover, in place.
+    Embeds an image as the mp3 or m4a's front cover, in place.
 
     Parameters:
-    mp3_path (str): Path of the mp3.
+    audio_path (str): Path of the mp3 or m4a.
     thumb_path (str): Path of the cover image.
     """
-    tmp_path = os.path.join(os.path.dirname(mp3_path), f"final_{os.path.basename(mp3_path)}")
-    result = subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", mp3_path, "-i", thumb_path,
-            "-map", "0:0", "-map", "1:0",
-            "-c:a", "copy",
-            "-c:v", "mjpeg",
+    tmp_path = os.path.join(os.path.dirname(audio_path), f"final_{os.path.basename(audio_path)}")
+    if audio_path.lower().endswith(".m4a"):
+        cover_args = ["-disposition:v:0", "attached_pic"]
+    else:
+        cover_args = [
             "-id3v2_version", "3",
             "-metadata:s:v", "title=Album cover",
             "-metadata:s:v", "comment=Cover (front)",
+        ]
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", audio_path, "-i", thumb_path,
+            "-map", "0:0", "-map", "1:0",
+            "-c:a", "copy",
+            "-c:v", "mjpeg",
+            *cover_args,
             tmp_path,
         ],
         capture_output=True,
     )
-    _swap_in(tmp_path, mp3_path, result.returncode == 0)
+    _swap_in(tmp_path, audio_path, result.returncode == 0)
 
 
 # ---------- ffprobe / ffmpeg ----------
@@ -728,7 +805,8 @@ def normalize_for_social(path, progress_hook=None, max_height=None):
 
 # ---------- Download ----------
 
-def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
+def download_media(url, dtype, out_dir, progress_hook=None, resolution=None,
+                   audio_quality="192", trim=None):
     """
     Downloads a video or its audio.
 
@@ -738,6 +816,8 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     out_dir (str): Folder to save the file in.
     progress_hook (callable/None): Receives yt-dlp progress dicts, then "normalizing" updates.
     resolution (str/int/None): Max height for video and TikTok; None means best.
+    audio_quality (str): One of AUDIO_QUALITIES, for audio downloads.
+    trim (tuple/None): (start, end) seconds from validate_trim(); either may be None.
 
     Returns:
     str: Path of the downloaded file.
@@ -759,8 +839,15 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
         'quiet': True,
         'no_warnings': True,
         **_cookie_opts(),
-        **_format_opts(dtype, resolution),
+        **_format_opts(dtype, resolution, audio_quality),
     }
+    if trim:
+        start, end = trim
+        # Only the chosen part is downloaded; cuts snap to re-encoded keyframes
+        ydl_opts['download_ranges'] = yt_dlp.utils.download_range_func(
+            None, [(start or 0, end if end is not None else float("inf"))]
+        )
+        ydl_opts['force_keyframes_at_cuts'] = True
     if progress_hook:
         ydl_opts['progress_hooks'] = [progress_hook]
 
@@ -772,7 +859,7 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None):
     with yt_dlp.YoutubeDL(effective_opts) as ydl:
         filename = os.path.basename(ydl.prepare_filename(info))
     if dtype == "audio":
-        filename = os.path.splitext(filename)[0] + ".mp3"
+        filename = os.path.splitext(filename)[0] + (".m4a" if audio_quality == "m4a" else ".mp3")
     final_path = os.path.join(out_dir, filename)
 
     if thumb_path and os.path.exists(final_path):
