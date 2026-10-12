@@ -318,3 +318,134 @@ def test_clean_error(message, expected):
     expected (str): The cleaned text.
     """
     assert webapp.clean_error(Exception(message)) == expected
+
+
+# ---------- Batch ----------
+
+def fake_batch_download(fail_urls=(), progress=None):
+    """
+    Builds a stand-in for download_media that saves every link as same-named "Video.mp4".
+
+    Parameters:
+    fail_urls (tuple): Links that raise instead of downloading.
+    progress (dict/None): {url: callable(progress_hook)} run during that link's download.
+
+    Returns:
+    callable: The fake.
+    """
+    def fake(url, dtype, out_dir, progress_hook=None, **kwargs):
+        if progress and url in progress:
+            progress[url](progress_hook)
+        if url in fail_urls:
+            raise yt_dlp.utils.DownloadError(f"ERROR: [generic] {url[-1]}: Video unavailable")
+        path = os.path.join(out_dir, "Video.mp4")
+        with open(path, "w") as f:
+            f.write(url)
+        return path
+    return fake
+
+
+def start_batch(client, links):
+    """
+    Posts a batch download.
+
+    Parameters:
+    client (flask.testing.FlaskClient): The test client.
+    links (list): The links, sent one per line.
+
+    Returns:
+    flask.Response: The /download response.
+    """
+    return client.post("/download", data={"mode": "batch", "type": "video", "urls": "\n".join(links)})
+
+
+def zip_contents(store, job):
+    """
+    Reads a finished batch job's zip.
+
+    Parameters:
+    store (JobStore): The store.
+    job (Job): The batch job.
+
+    Returns:
+    dict: {name in zip: file text}.
+    """
+    import zipfile
+    with zipfile.ZipFile(os.path.join(store.folder(job.id), job.files[0])) as z:
+        return {name: z.read(name).decode() for name in z.namelist()}
+
+
+def test_batch_zips_all_items(client, store, monkeypatch):
+    """Checks every link ends up in one zip, numbered in order, with no loose files left."""
+    monkeypatch.setattr(webapp, "download_media", fake_batch_download())
+    job_id = start_batch(client, ["https://a", "https://b", "https://c"]).get_json()["job_id"]
+    job = store.get(job_id)
+    assert job.status == "done"
+    assert job.files == [f"batch-{job_id[:8]}.zip"]
+    assert job.item_count == 3
+    assert job.title == "Batch (3 items)"
+    assert zip_contents(store, job) == {
+        "01 - Video.mp4": "https://a", "02 - Video.mp4": "https://b", "03 - Video.mp4": "https://c",
+    }
+    assert sorted(os.listdir(store.folder(job_id))) == [f"batch-{job_id[:8]}.zip", "job.json"]
+
+
+def test_batch_partial_failure(client, store, monkeypatch):
+    """Checks a broken link is skipped and reported while the rest are zipped."""
+    monkeypatch.setattr(webapp, "download_media", fake_batch_download(fail_urls=("https://b",)))
+    job_id = start_batch(client, ["https://a", "https://b", "https://c"]).get_json()["job_id"]
+    job = store.get(job_id)
+    assert job.status == "done"
+    assert sorted(zip_contents(store, job)) == ["01 - Video.mp4", "03 - Video.mp4"]
+    assert job.failed_items == [{"url": "https://b", "error": "Video unavailable"}]
+
+
+def test_batch_all_fail(client, store, monkeypatch):
+    """Checks a batch where nothing downloaded ends as an error."""
+    monkeypatch.setattr(webapp, "download_media",
+                        fake_batch_download(fail_urls=("https://a", "https://b")))
+    job_id = start_batch(client, ["https://a", "https://b"]).get_json()["job_id"]
+    job = store.get(job_id)
+    assert job.status == "error"
+    assert job.files == []
+
+
+def test_batch_too_many_links(client, tmp_path):
+    """Checks more than 50 links is refused before any job is made."""
+    response = start_batch(client, [f"https://v{i}" for i in range(51)])
+    assert response.status_code == 400
+    assert "max 50" in response.get_json()["error"]
+    assert os.listdir(tmp_path) == []
+
+
+def test_batch_ignores_trim_and_subtitles(client, monkeypatch):
+    """Checks batch mode never trims or adds subtitles, but keeps quality settings."""
+    calls = []
+
+    def fake(url, dtype, out_dir, **kwargs):
+        calls.append(kwargs)
+        return fake_batch_download()(url, dtype, out_dir)
+
+    monkeypatch.setattr(webapp, "download_media", fake)
+    client.post("/download", data={
+        "mode": "batch", "type": "audio", "urls": "https://a", "audio_quality": "320",
+        "trim_start": "0:10", "sub_lang": "km", "sub_mode": "burn",
+    })
+    assert calls[0]["trim"] is None
+    assert calls[0]["subtitles"] is None
+    assert calls[0]["audio_quality"] == "320"
+
+
+def test_batch_progress_overall(client, store, monkeypatch):
+    """Checks progress is reported across the whole batch, not per item."""
+    seen = {}
+
+    def halfway(hook):
+        hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2})
+        job = next(iter(store._jobs.values()))
+        seen.update(percent=job.percent, item_index=job.item_index)
+
+    monkeypatch.setattr(webapp, "download_media",
+                        fake_batch_download(progress={"https://b": halfway}))
+    start_batch(client, ["https://a", "https://b", "https://c", "https://d"])
+    assert seen == {"percent": 37, "item_index": 1}
