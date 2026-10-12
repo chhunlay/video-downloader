@@ -467,7 +467,7 @@ def test_burn_passes_subtitle_to_normalize(tmp_path, capture_ydl_opts, monkeypat
     srt.write_text(SRT, encoding="utf-8")
     calls = {}
     monkeypatch.setattr(downloader, "normalize_for_social",
-                        lambda path, **k: calls.update(k))
+                        lambda path, **k: calls.update(k) or True)
     downloader.download_media("https://x", "video", str(tmp_path),
                               subtitles={"lang": "km", "mode": "burn"})
     assert calls["burn_subtitles"] == str(srt)
@@ -492,8 +492,11 @@ def test_burn_uses_complex_shaping(tmp_path, monkeypatch):
     monkeypatch.setattr(downloader, "_already_social_safe", lambda path: True)
     monkeypatch.setattr(downloader, "_get_source_fps", lambda path: "30")
     monkeypatch.setattr(downloader, "_get_duration_seconds", lambda path: None)
-    monkeypatch.setattr(downloader.subprocess, "run",
-                        lambda args, **k: type("R", (), {"returncode": 0})())
+    def fake_run(args, **kwargs):
+        open(args[-1], "w").close()  # the .srt -> .ass conversion succeeds
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
     commands = []
 
     class FakePopen:
@@ -559,3 +562,83 @@ def test_expand_batch_limit():
     assert len(downloader.expand_batch(fifty, extract=no_playlists)) == 50
     with pytest.raises(ValueError, match="max 50"):
         downloader.expand_batch(fifty + "\nhttps://v50", extract=no_playlists)
+
+
+# ---------- Review fixes ----------
+
+def test_expand_batch_bad_playlist_is_a_clear_error():
+    """Checks a playlist that can't be read gives a readable ValueError, not a crash."""
+    def broken(url):
+        raise yt_dlp.utils.DownloadError("ERROR: [youtube:tab] X: This playlist does not exist")
+    with pytest.raises(ValueError, match="Couldn't read playlist"):
+        downloader.expand_batch("https://youtube.com/playlist?list=X", extract=broken)
+
+
+def test_expand_batch_keeps_video_links_from_playlists():
+    """Checks a video copied from inside a playlist stays one video."""
+    url = "https://www.youtube.com/watch?v=abc&list=RDabc&index=2"
+    assert downloader.expand_batch(url, extract=no_playlists) == [url]
+
+
+def test_extract_playlist_stops_after_limit(monkeypatch):
+    """Checks huge playlists stop being read just past the limit."""
+    captured = {}
+
+    class FakeYDL:
+        """Records the options instead of contacting YouTube."""
+
+        def __init__(self, opts):
+            captured.update(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download):
+            return {"entries": []}
+
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", FakeYDL)
+    downloader._extract_playlist("https://youtube.com/playlist?list=X")
+    assert captured["playlistend"] == downloader.BATCH_LIMIT + 1
+
+
+def test_burn_failure_fails_the_download(tmp_path, capture_ydl_opts, monkeypatch):
+    """Checks a burn-in that didn't work fails the job instead of returning a plain video."""
+    (tmp_path / "Clip.km.srt").write_text(SRT, encoding="utf-8")
+    monkeypatch.setattr(downloader, "normalize_for_social", lambda path, **k: False)
+    with pytest.raises(ValueError, match="burn the subtitles"):
+        downloader.download_media("https://x", "video", str(tmp_path),
+                                  subtitles={"lang": "km", "mode": "burn"})
+
+
+def test_normalize_reports_failed_burn(tmp_path, monkeypatch):
+    """Checks normalize_for_social returns False when the burn re-encode fails."""
+    video = tmp_path / "Clip.mp4"
+    video.write_bytes(b"video")
+    srt = tmp_path / "Clip.km.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    monkeypatch.setattr(downloader, "_get_source_fps", lambda path: "30")
+    monkeypatch.setattr(downloader, "_get_duration_seconds", lambda path: None)
+
+    def fake_run(args, **kwargs):
+        open(args[-1], "w").close()  # the .ass conversion succeeds
+        return type("R", (), {"returncode": 0})()
+
+    class FailingPopen:
+        """An ffmpeg run that fails."""
+
+        returncode = 1
+        stdout = iter(())
+
+        def __init__(self, args, **kwargs):
+            pass
+
+        def communicate(self, timeout=None):
+            return "", "boom"
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr(downloader.subprocess, "Popen", FailingPopen)
+    assert downloader.normalize_for_social(str(video), burn_subtitles=str(srt)) is False
+    assert not (tmp_path / "burn_subs.ass").exists()
