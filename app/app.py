@@ -9,6 +9,7 @@ import threading
 import time
 import zipfile
 
+import yt_dlp
 from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory
 
 from downloader import (
@@ -35,6 +36,16 @@ store = JobStore(DOWNLOAD_DIR)
 DTYPES = ("video", "audio", "tiktok")
 SUBTITLE_MODES = ("srt", "burn")
 LOOKUP_LIMIT = 100
+
+# Language codes like "en", "en-US", "zh-Hans", "km-orig". yt-dlp treats the
+# code as a regex and the code is part of the .srt file name, so nothing else is allowed.
+_SUB_LANG_RE = re.compile(r"[A-Za-z0-9]{1,8}(-[A-Za-z0-9]{1,10})*")
+
+# At most this many downloads run at once; the rest wait as "queued"
+JOB_SLOTS = threading.BoundedSemaphore(2)
+
+# New downloads are refused below this much free disk space
+MIN_FREE_BYTES = 2 * 1024 ** 3
 
 # yt-dlp prefixes errors with "ERROR: " and often "[site] video-id: "
 _ERROR_PREFIX_RE = re.compile(r"^(ERROR:\s*)?(\[[^\]]+\]\s*[^:\s]+:\s*)?")
@@ -111,6 +122,9 @@ def parse_download_form(form):
             raise ValueError("Unknown subtitle option")
         if not sub_lang:
             raise ValueError("Pick a subtitle language")
+        # "all" is a yt-dlp keyword that would fetch every language
+        if not _SUB_LANG_RE.fullmatch(sub_lang) or sub_lang.lower() == "all":
+            raise ValueError("Unknown subtitle language")
         subtitles = {"lang": sub_lang, "mode": sub_mode}
 
     return {
@@ -144,6 +158,9 @@ def make_job_hook(job_id, item_index=0, item_count=1):
     last = {"status": None, "percent": None}
 
     def hook(d):
+        # A deleted job stops its download at the next progress update
+        if store.get(job_id) is None:
+            raise yt_dlp.utils.DownloadCancelled("Job deleted")
         if d["status"] == "downloading":
             status, percent = "downloading", download_percent(d)
             if percent is None:
@@ -171,6 +188,8 @@ def run_single(job_id, url):
     url (str): The video link.
     """
     job = store.get(job_id)
+    if job is None:
+        return
     options = job.options
     store.update(job_id, status="downloading")
     try:
@@ -206,6 +225,8 @@ def run_batch(job_id, urls):
     urls (list): The video links.
     """
     job = store.get(job_id)
+    if job is None:
+        return
     options = job.options
     folder = store.folder(job_id)
     store.update(job_id, status="downloading", item_count=len(urls),
@@ -214,6 +235,8 @@ def run_batch(job_id, urls):
     downloaded = []  # (path, name in zip)
     failed = []
     for index, url in enumerate(urls):
+        if store.get(job_id) is None:
+            return  # deleted; run_job removes the folder
         store.update(job_id, item_index=index)
         item_folder = os.path.join(folder, f"{index + 1:02d}")
         os.makedirs(item_folder, exist_ok=True)
@@ -231,6 +254,8 @@ def run_batch(job_id, urls):
             failed.append({"url": url, "error": clean_error(e)})
             store.update(job_id, failed_items=list(failed))
 
+    if store.get(job_id) is None:
+        return
     if not downloaded:
         store.update(job_id, status="error", error="None of the links could be downloaded")
         return
@@ -252,6 +277,24 @@ def run_batch(job_id, urls):
     store.update(job_id, status="done", percent=100, files=[zip_name])
 
 
+def run_job(worker, job_id, target):
+    """
+    Runs a worker once a download slot is free, then tidies up if the job was deleted meanwhile.
+
+    Parameters:
+    worker (callable): run_single or run_batch.
+    job_id (str): The job.
+    target (str/list): The link (single) or links (batch).
+    """
+    try:
+        with JOB_SLOTS:
+            worker(job_id, target)
+    finally:
+        # yt-dlp recreates its output folder, so a deleted job can leave one behind
+        if store.get(job_id) is None:
+            shutil.rmtree(store.folder(job_id), ignore_errors=True)
+
+
 @app.route("/")
 def index():
     """
@@ -269,19 +312,23 @@ def download():
     Validates the form and starts a download job in a background thread.
 
     Returns:
-    Response: {"job_id": ...}, or 400 {"error": ...} for invalid input.
+    Response: {"job_id": ...}, 400 {"error": ...} for invalid input, or 503
+    when the server is low on disk space.
     """
     try:
         parsed = parse_download_form(request.form)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
+    if shutil.disk_usage(store.root_dir).free < MIN_FREE_BYTES:
+        return jsonify({"error": "The server is low on disk space, try again later"}), 503
+
     job = store.create(parsed["mode"], parsed["dtype"], parsed["options"])
     if parsed["mode"] == "batch":
         worker, target = run_batch, parsed["urls"]
     else:
         worker, target = run_single, parsed["url"]
-    threading.Thread(target=worker, args=(job.id, target)).start()
+    threading.Thread(target=run_job, args=(worker, job.id, target)).start()
     return jsonify({"job_id": job.id})
 
 
@@ -337,7 +384,8 @@ def jobs_lookup():
     Returns:
     Response: {"jobs": {id: job fields or null}}, or 400 for a bad request.
     """
-    ids = (request.get_json(silent=True) or {}).get("ids")
+    body = request.get_json(silent=True)
+    ids = body.get("ids") if isinstance(body, dict) else None
     if not isinstance(ids, list) or len(ids) > LOOKUP_LIMIT:
         return jsonify({"error": f"Send a list of at most {LOOKUP_LIMIT} ids"}), 400
 
