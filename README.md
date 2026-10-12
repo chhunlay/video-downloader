@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.8.4-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.8.6-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -12,7 +12,7 @@
 [![FFmpeg](https://img.shields.io/badge/FFmpeg-required-007808?logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
 [![Last commit](https://img.shields.io/github/last-commit/chhunlay/video-downloader)](https://github.com/chhunlay/video-downloader/commits)
 
-[Setup](#setup) · [Web app](#running-the-web-app) · [Telegram bot](#running-the-telegram-bot) · [Instagram / Facebook](#instagram--facebook-links) · [Changelog](CHANGELOG.md)
+[Setup](#setup) · [Web app](#running-the-web-app) · [Telegram bot](#running-the-telegram-bot) · [Instagram / Facebook](#instagram--facebook-links) · [Tests](#running-the-tests) · [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -79,6 +79,18 @@ work once you provide real session cookies:
 
 YouTube and TikTok links work without this.
 
+## Running the tests
+
+```
+cd app
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The tests cover the download helpers, the web app routes and the bot's
+text helpers. yt-dlp, ffmpeg and the network are faked, so the whole
+suite runs offline in under a second.
+
 ## Building a standalone Windows app
 
 See [`app/BUILD_WINDOWS.md`](app/BUILD_WINDOWS.md) for turning the web
@@ -94,6 +106,7 @@ app/
   downloader.py          Shared yt-dlp/ffmpeg download + re-encode logic
   desktop_app.py         pywebview wrapper for the Windows build
   templates/index.html   Web app UI
+  tests/                 pytest suite (run from app/)
 legacy/
   tiktok_downloader.py, youtube_downloader.py, youtube_downloader_v2.py
   Early standalone scripts, superseded by app/ - kept for reference.

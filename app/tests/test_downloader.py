@@ -1,0 +1,240 @@
+"""Tests for the pure helpers in downloader.py (no network, no ffmpeg)."""
+
+import pytest
+import yt_dlp
+
+import downloader
+
+
+# ---------- URL helpers ----------
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://www.tiktok.com/@user/video/123", True),
+    ("https://VM.TIKTOK.COM/abc/", True),
+    ("https://www.youtube.com/watch?v=abc", False),
+])
+def test_is_tiktok(url, expected):
+    """
+    Checks that TikTok links are recognized regardless of case.
+
+    Parameters:
+    url (str): The link to check.
+    expected (bool): The expected result.
+    """
+    assert downloader.is_tiktok(url) is expected
+
+
+# ---------- Progress ----------
+
+def test_download_percent_uses_total_bytes():
+    """Checks the percentage when the exact total is known."""
+    assert downloader.download_percent({"downloaded_bytes": 50, "total_bytes": 200}) == 25
+
+
+def test_download_percent_falls_back_to_estimate():
+    """Checks the percentage when only an estimated total is known."""
+    assert downloader.download_percent({"downloaded_bytes": 30, "total_bytes_estimate": 60}) == 50
+
+
+def test_download_percent_unknown_total():
+    """Checks that an unknown total size gives None instead of crashing."""
+    assert downloader.download_percent({"downloaded_bytes": 30}) is None
+
+
+# ---------- Sizes ----------
+
+@pytest.mark.parametrize("num_bytes, expected", [
+    (None, None),
+    (0, None),
+    (512, "512B"),
+    (2048, "2.0KB"),
+    (5 * 1024 * 1024, "5.0MB"),
+    (3 * 1024 ** 3, "3.0GB"),
+    (5000 * 1024 ** 3, "5000.0GB"),
+])
+def test_format_size(num_bytes, expected):
+    """
+    Checks byte counts are formatted with the right unit.
+
+    Parameters:
+    num_bytes (int/None): Size in bytes.
+    expected (str/None): The expected display string.
+    """
+    assert downloader.format_size(num_bytes) == expected
+
+
+def test_known_size_prefers_exact_size():
+    """Checks filesize wins over filesize_approx."""
+    assert downloader.known_size({"filesize": 10, "filesize_approx": 99}) == 10
+    assert downloader.known_size({"filesize_approx": 99}) == 99
+    assert downloader.known_size({}) is None
+
+
+# ---------- Formats ----------
+
+FORMATS = [
+    {"format_id": "a", "height": None, "vcodec": "none", "filesize": 1024 * 1024},
+    {"format_id": "v720", "height": 720, "vcodec": "avc1", "filesize": 9 * 1024 * 1024},
+    {"format_id": "v720b", "height": 720, "vcodec": "vp9", "filesize": 4 * 1024 * 1024},
+    {"format_id": "v1080", "height": 1080, "vcodec": "avc1", "tbr": 800},
+    {"format_id": "x", "height": 480},  # X/Twitter style: no vcodec at all
+    {"format_id": "storyboard", "height": 90, "vcodec": "none"},
+]
+
+
+def test_get_available_resolutions():
+    """Checks heights are distinct, sorted highest first, and skip no-video formats."""
+    info = {"formats": FORMATS}
+    assert downloader.get_available_resolutions(info) == [1080, 720, 480]
+
+
+def test_get_resolutions_with_sizes():
+    """Checks each height gets the largest video size plus the best audio size."""
+    info = {"formats": FORMATS, "duration": 10}
+    result = dict(downloader.get_resolutions_with_sizes(info))
+    # 720p: largest reported video (9MB) + best audio (1MB)
+    assert result[720] == "10.0MB"
+    # 1080p: 800 kbps * 10 s = 1,000,000 bytes estimate, + 1MB audio
+    assert result[1080] == downloader.format_size(1_000_000 + 1024 * 1024)
+    # 480p: no size information at all
+    assert result[480] is None
+
+
+def test_estimate_tiktok_size_skips_watermarked_format():
+    """Checks the watermarked "download" format is ignored when estimating."""
+    info = {"formats": [
+        {"format_id": downloader.TIKTOK_WATERMARK_FORMAT_ID, "filesize": 50 * 1024 * 1024},
+        {"format_id": "h264", "filesize": 2 * 1024 * 1024},
+    ]}
+    assert downloader.estimate_tiktok_size(info) == "2.0MB"
+
+
+def test_format_opts_audio_extracts_mp3():
+    """Checks audio downloads convert to 192 kbps MP3."""
+    opts = downloader._format_opts("audio", None)
+    extract = opts["postprocessors"][0]
+    assert extract["key"] == "FFmpegExtractAudio"
+    assert extract["preferredcodec"] == "mp3"
+
+
+def test_format_opts_tiktok_excludes_watermark():
+    """Checks TikTok downloads exclude the watermarked format."""
+    opts = downloader._format_opts("tiktok", None)
+    assert f"format_id!={downloader.TIKTOK_WATERMARK_FORMAT_ID}" in opts["format"]
+
+
+def test_format_opts_video_with_resolution():
+    """Checks a chosen resolution caps the height and output is mp4."""
+    opts = downloader._format_opts("video", "720")
+    assert "[height<=720]" in opts["format"]
+    assert opts["merge_output_format"] == "mp4"
+
+
+def test_format_opts_video_best():
+    """Checks no resolution means no height cap."""
+    assert "height" not in downloader._format_opts("video", None)["format"]
+
+
+# ---------- Titles ----------
+
+@pytest.mark.parametrize("title, expected", [
+    ("VANNDA - DO YOU (OFFICIAL VIDEO)", "VANNDA - DO YOU"),
+    ("Song Name [Lyrics]", "Song Name"),
+    ("Artist | Track (Official Audio) [4K]", "Artist   Track"),
+    ("Plain Title", "Plain Title"),
+    (None, ""),
+])
+def test_clean_title_for_search(title, expected):
+    """
+    Checks bracketed junk is stripped from titles before a music search.
+
+    Parameters:
+    title (str/None): The raw title.
+    expected (str): The cleaned title.
+    """
+    assert downloader.clean_title_for_search(title) == expected
+
+
+def test_normalize_for_match():
+    """Checks text is reduced to lowercase letters and digits."""
+    assert downloader._normalize_for_match("Don't Stop!") == "dontstop"
+    assert downloader._normalize_for_match(None) == ""
+
+
+# ---------- Retry logic ----------
+
+class FakeYDL:
+    """A stand-in for yt_dlp.YoutubeDL that fails a set number of times."""
+
+    def __init__(self, errors):
+        """
+        Stores the errors to raise, one per call, before succeeding.
+
+        Parameters:
+        errors (list): Messages to raise as DownloadError, in order.
+        """
+        self.errors = list(errors)
+        self.calls = 0
+
+    def extract_info(self, url, download):
+        """
+        Raises the next queued error, or returns a fake info dict.
+
+        Parameters:
+        url (str): The video link.
+        download (bool): Ignored.
+
+        Returns:
+        dict: {"title": "ok"} once the errors run out.
+        """
+        self.calls += 1
+        if self.errors:
+            raise yt_dlp.utils.DownloadError(self.errors.pop(0))
+        return {"title": "ok"}
+
+
+def test_retry_recovers_from_transient_error():
+    """Checks a transient TikTok error is retried until it succeeds."""
+    ydl = FakeYDL(["Unable to extract universal data for rehydration"] * 2)
+    assert downloader.extract_info_with_retry(ydl, "u", False, delay=0) == {"title": "ok"}
+    assert ydl.calls == 3
+
+
+def test_retry_does_not_retry_real_errors():
+    """Checks a non-transient error is raised straight away."""
+    ydl = FakeYDL(["Video unavailable"])
+    with pytest.raises(yt_dlp.utils.DownloadError):
+        downloader.extract_info_with_retry(ydl, "u", False, delay=0)
+    assert ydl.calls == 1
+
+
+def test_retry_gives_up_after_last_attempt():
+    """Checks retries stop at the attempt limit."""
+    ydl = FakeYDL(["status code 100001"] * 10)
+    with pytest.raises(yt_dlp.utils.DownloadError):
+        downloader.extract_info_with_retry(ydl, "u", False, attempts=3, delay=0)
+    assert ydl.calls == 3
+
+
+# ---------- Cookies ----------
+
+def test_cookie_opts_missing_file(tmp_path, monkeypatch):
+    """Checks a missing cookies.txt gives no cookie option."""
+    monkeypatch.setattr(downloader, "COOKIE_FILE", str(tmp_path / "cookies.txt"))
+    assert downloader._cookie_opts() == {}
+
+
+def test_cookie_opts_invalid_file(tmp_path, monkeypatch):
+    """Checks a cookies.txt that isn't a Netscape export is ignored."""
+    path = tmp_path / "cookies.txt"
+    path.write_text("not a cookie file\n")
+    monkeypatch.setattr(downloader, "COOKIE_FILE", str(path))
+    assert downloader._cookie_opts() == {}
+
+
+def test_cookie_opts_valid_file(tmp_path, monkeypatch):
+    """Checks a real Netscape export is passed to yt-dlp."""
+    path = tmp_path / "cookies.txt"
+    path.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.setattr(downloader, "COOKIE_FILE", str(path))
+    assert downloader._cookie_opts() == {"cookiefile": str(path)}
