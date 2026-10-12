@@ -166,6 +166,60 @@ def download_percent(d):
     return int(d.get('downloaded_bytes', 0) / total * 100)
 
 
+# ---------- Batch ----------
+
+BATCH_LIMIT = 50
+
+
+def _extract_playlist(url):
+    """
+    Lists a playlist's videos without downloading anything.
+
+    Parameters:
+    url (str): The playlist link.
+
+    Returns:
+    dict: yt-dlp's flat info dict, with "entries".
+    """
+    opts = {'quiet': True, 'no_warnings': True, 'extract_flat': 'in_playlist', **_cookie_opts()}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
+
+
+def expand_batch(text, limit=BATCH_LIMIT, extract=None):
+    """
+    Turns pasted links, and any playlist links among them, into a list of video links.
+
+    Parameters:
+    text (str): Links separated by spaces or new lines.
+    limit (int): Maximum number of videos.
+    extract (callable/None): Playlist lister, url -> info dict; defaults to yt-dlp.
+
+    Returns:
+    list: Unique video links, in the order given.
+
+    Raises:
+    ValueError: If there are no links, or more than limit after expansion.
+    """
+    extract = extract or _extract_playlist
+    urls = []
+    for word in (text or "").split():
+        if not re.match(r"https?://", word, re.IGNORECASE):
+            continue
+        if "list=" in word or "/playlist" in word:
+            entries = extract(word).get("entries") or []
+            urls.extend(e.get("url") or e.get("webpage_url") for e in entries if e)
+        else:
+            urls.append(word)
+
+    urls = list(dict.fromkeys(u for u in urls if u))
+    if not urls:
+        raise ValueError("No links found")
+    if len(urls) > limit:
+        raise ValueError(f"Too many links: {len(urls)} (max {limit})")
+    return urls
+
+
 # ---------- Formats and sizes ----------
 
 def _is_video_format(f):
