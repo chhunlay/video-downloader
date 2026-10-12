@@ -513,3 +513,49 @@ def test_burn_uses_complex_shaping(tmp_path, monkeypatch):
     vf = commands[0][commands[0].index("-vf") + 1]
     assert "ass=burn_subs.ass:shaping=complex" in vf
     assert not (tmp_path / "burn_subs.ass").exists()
+
+
+# ---------- Batch ----------
+
+def no_playlists(url):
+    """
+    Fails the test if a plain link is treated as a playlist.
+
+    Parameters:
+    url (str): The link.
+    """
+    raise AssertionError(f"extract called for {url}")
+
+
+def test_expand_batch_splits_and_dedupes():
+    """Checks links are split on any whitespace, deduplicated, and non-links dropped."""
+    text = "https://a\n\nhttps://b  https://a\nnot-a-link"
+    assert downloader.expand_batch(text, extract=no_playlists) == ["https://a", "https://b"]
+
+
+def test_expand_batch_expands_playlists():
+    """Checks a playlist link is replaced by its videos, in order."""
+    playlist = "https://youtube.com/playlist?list=X"
+
+    def fake_extract(url):
+        assert url == playlist
+        return {"entries": [{"url": "https://v1"}, {"webpage_url": "https://v2"}, None]}
+
+    text = f"https://v0\n{playlist}"
+    assert downloader.expand_batch(text, extract=fake_extract) == [
+        "https://v0", "https://v1", "https://v2",
+    ]
+
+
+def test_expand_batch_empty():
+    """Checks text without links is refused."""
+    with pytest.raises(ValueError, match="No links found"):
+        downloader.expand_batch("hello", extract=no_playlists)
+
+
+def test_expand_batch_limit():
+    """Checks more than 50 links is refused, and exactly 50 is fine."""
+    fifty = "\n".join(f"https://v{i}" for i in range(50))
+    assert len(downloader.expand_batch(fifty, extract=no_playlists)) == 50
+    with pytest.raises(ValueError, match="max 50"):
+        downloader.expand_batch(fifty + "\nhttps://v50", extract=no_playlists)
