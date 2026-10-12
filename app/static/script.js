@@ -20,7 +20,8 @@ const html = document.documentElement;
 function applyTheme(theme) {
     const isLight = theme === 'light';
     html.setAttribute('data-theme', isLight ? 'light' : 'dark');
-    $('themeIcon').textContent = isLight ? '☀️' : '🌙';
+    $('themeIconSun').classList.toggle('hidden', !isLight);
+    $('themeIconMoon').classList.toggle('hidden', isLight);
 }
 
 function getStoredTheme() {
