@@ -3,9 +3,11 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
+import zipfile
 
 from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory
 
@@ -13,6 +15,7 @@ from downloader import (
     AUDIO_QUALITIES,
     download_media,
     download_percent,
+    expand_batch,
     get_resolutions_with_sizes,
     get_subtitle_languages,
     get_video_info,
@@ -58,8 +61,9 @@ def parse_download_form(form):
     form (werkzeug.datastructures.MultiDict): The posted form.
 
     Returns:
-    dict: {"mode", "dtype", "url", "options"}; options holds resolution,
-    audio_quality, trim and subtitles.
+    dict: {"mode", "dtype", "url" or "urls", "options"}; options holds
+    resolution, audio_quality, trim and subtitles (trim and subtitles are
+    always None in batch mode).
 
     Raises:
     ValueError: With a message for the page when a field is invalid.
@@ -75,6 +79,20 @@ def parse_download_form(form):
     audio_quality = form.get("audio_quality") or "192"
     if audio_quality not in AUDIO_QUALITIES:
         raise ValueError("Unknown audio quality")
+
+    if form.get("mode") == "batch":
+        # Videos differ in length and languages, so batches skip trim and subtitles
+        return {
+            "mode": "batch",
+            "dtype": dtype,
+            "urls": expand_batch(form.get("urls")),
+            "options": {
+                "resolution": resolution,
+                "audio_quality": audio_quality,
+                "trim": None,
+                "subtitles": None,
+            },
+        }
 
     url = (form.get("url") or "").strip()
     if not url:
@@ -108,14 +126,17 @@ def parse_download_form(form):
     }
 
 
-def make_job_hook(job_id):
+def make_job_hook(job_id, item_index=0, item_count=1):
     """
     Builds a progress hook that reports yt-dlp and re-encode progress to a job.
 
+    For batches the item's percent is turned into the whole batch's percent.
     The job is only saved when its status or whole percent changes.
 
     Parameters:
     job_id (str): The job to update.
+    item_index (int): Position of this item in the batch, from 0.
+    item_count (int): Number of items in the batch.
 
     Returns:
     callable: A hook for download_media's progress_hook.
@@ -133,6 +154,7 @@ def make_job_hook(job_id):
             status, percent = "optimizing", d.get("percent", last["percent"] or 0)
         else:
             return
+        percent = int((item_index + percent / 100) / item_count * 100)
         if (status, percent) != (last["status"], last["percent"]):
             last.update(status=status, percent=percent)
             store.update(job_id, status=status, percent=percent)
@@ -171,6 +193,65 @@ def run_single(job_id, url):
         store.update(job_id, status="error", error=clean_error(e))
 
 
+def run_batch(job_id, urls):
+    """
+    Downloads each link in turn, then zips the results into one file.
+
+    Each item gets its own numbered sub-folder, so videos with the same title
+    don't overwrite each other; the numbers keep the playlist order in the zip.
+    Failed items are skipped and listed in failed_items.
+
+    Parameters:
+    job_id (str): The batch job.
+    urls (list): The video links.
+    """
+    job = store.get(job_id)
+    options = job.options
+    folder = store.folder(job_id)
+    store.update(job_id, status="downloading", item_count=len(urls),
+                 title=f"Batch ({len(urls)} items)")
+
+    downloaded = []  # (path, name in zip)
+    failed = []
+    for index, url in enumerate(urls):
+        store.update(job_id, item_index=index)
+        item_folder = os.path.join(folder, f"{index + 1:02d}")
+        os.makedirs(item_folder, exist_ok=True)
+        try:
+            path = download_media(
+                url, job.dtype, item_folder,
+                progress_hook=make_job_hook(job_id, index, len(urls)),
+                resolution=options.get("resolution"),
+                audio_quality=options.get("audio_quality", "192"),
+                trim=None,
+                subtitles=None,
+            )
+            downloaded.append((path, f"{index + 1:02d} - {os.path.basename(path)}"))
+        except Exception as e:
+            failed.append({"url": url, "error": clean_error(e)})
+            store.update(job_id, failed_items=list(failed))
+
+    if not downloaded:
+        store.update(job_id, status="error", error="None of the links could be downloaded")
+        return
+
+    store.update(job_id, status="zipping")
+    zip_name = f"batch-{job_id[:8]}.zip"
+    try:
+        # Media is already compressed, so store it as-is
+        with zipfile.ZipFile(os.path.join(folder, zip_name), "w", zipfile.ZIP_STORED) as z:
+            for path, arcname in downloaded:
+                z.write(path, arcname)
+    except Exception as e:
+        store.update(job_id, status="error", error=clean_error(e))
+        return
+    finally:
+        for index in range(len(urls)):
+            shutil.rmtree(os.path.join(folder, f"{index + 1:02d}"), ignore_errors=True)
+
+    store.update(job_id, status="done", percent=100, files=[zip_name])
+
+
 @app.route("/")
 def index():
     """
@@ -196,7 +277,11 @@ def download():
         return jsonify({"error": str(e)}), 400
 
     job = store.create(parsed["mode"], parsed["dtype"], parsed["options"])
-    threading.Thread(target=run_single, args=(job.id, parsed["url"])).start()
+    if parsed["mode"] == "batch":
+        worker, target = run_batch, parsed["urls"]
+    else:
+        worker, target = run_single, parsed["url"]
+    threading.Thread(target=worker, args=(job.id, target)).start()
     return jsonify({"job_id": job.id})
 
 
