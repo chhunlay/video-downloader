@@ -2,12 +2,17 @@
 
 import json
 import os
+import threading
+import time
 
 import pytest
 import yt_dlp
 
 import app as webapp
 from jobs import JobStore
+
+# Captured before any fixture swaps threading.Thread for InlineThread
+RealThread = threading.Thread
 
 
 class InlineThread:
@@ -43,6 +48,12 @@ def store(tmp_path, monkeypatch):
     job_store = JobStore(str(tmp_path))
     monkeypatch.setattr(webapp, "store", job_store)
     monkeypatch.setattr(webapp.threading, "Thread", InlineThread)
+
+    def no_real_downloads(*args, **kwargs):
+        raise AssertionError("a test reached the real download_media")
+
+    # Tests that download replace this with a fake; the rest must never hit the network
+    monkeypatch.setattr(webapp, "download_media", no_real_downloads)
     return job_store
 
 
@@ -449,3 +460,132 @@ def test_batch_progress_overall(client, store, monkeypatch):
                         fake_batch_download(progress={"https://b": halfway}))
     start_batch(client, ["https://a", "https://b", "https://c", "https://d"])
     assert seen == {"percent": 37, "item_index": 1}
+
+
+# ---------- Review fixes ----------
+
+@pytest.mark.parametrize("lang", [".*", "../x", "all", "en/../../a", "-en"])
+def test_download_rejects_bad_subtitle_language(client, tmp_path, lang):
+    """
+    Checks subtitle languages must look like language codes.
+
+    Parameters:
+    client (flask.testing.FlaskClient): The test client.
+    tmp_path (pathlib.Path): The store's folder.
+    lang (str): The bad code.
+    """
+    response = start(client, sub_lang=lang, sub_mode="srt")
+    assert response.status_code == 400
+    assert os.listdir(tmp_path) == []
+
+
+@pytest.mark.parametrize("lang", ["en", "en-US", "zh-Hans", "km-orig"])
+def test_download_accepts_real_subtitle_languages(client, monkeypatch, lang):
+    """
+    Checks real language codes are accepted.
+
+    Parameters:
+    client (flask.testing.FlaskClient): The test client.
+    monkeypatch (pytest.MonkeyPatch): pytest's patcher.
+    lang (str): The code.
+    """
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    assert start(client, sub_lang=lang, sub_mode="srt").status_code == 200
+
+
+def test_batch_bad_playlist_is_400(client, tmp_path, monkeypatch):
+    """Checks a broken playlist link gives a readable 400, not a server error."""
+    def broken(url):
+        raise yt_dlp.utils.DownloadError("ERROR: playlist does not exist")
+    monkeypatch.setattr(webapp_downloader(), "_extract_playlist", broken)
+    response = start_batch(client, ["https://a.com/v1", "https://youtube.com/playlist?list=X"])
+    assert response.status_code == 400
+    assert "Couldn't read playlist" in response.get_json()["error"]
+
+
+def webapp_downloader():
+    """
+    Gets the downloader module the app uses.
+
+    Returns:
+    module: downloader.
+    """
+    import downloader
+    return downloader
+
+
+def test_lookup_rejects_non_object_body(client):
+    """Checks a JSON list body is a 400, not a server error."""
+    assert client.post("/jobs/lookup", json=[1, 2]).status_code == 400
+
+
+def test_delete_during_download_stops_and_cleans_up(client, store, tmp_path, monkeypatch):
+    """Checks deleting a running job stops the download and leaves no folder behind."""
+    def fake(url, dtype, out_dir, progress_hook=None, **kwargs):
+        job_id = os.path.basename(out_dir)
+        client.delete(f"/jobs/{job_id}")
+        progress_hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2})
+        os.makedirs(out_dir, exist_ok=True)  # yt-dlp would recreate the folder
+        raise AssertionError("download should have been cancelled")
+
+    monkeypatch.setattr(webapp, "download_media", fake)
+    start(client)
+    assert os.listdir(tmp_path) == []
+
+
+def test_delete_during_batch_skips_remaining_items(client, store, tmp_path, monkeypatch):
+    """Checks a deleted batch stops before the next item and removes its folder."""
+    calls = []
+
+    def fake(url, dtype, out_dir, progress_hook=None, **kwargs):
+        calls.append(url)
+        job_id = os.path.basename(os.path.dirname(out_dir))
+        client.delete(f"/jobs/{job_id}")
+        return fake_batch_download()(url, dtype, out_dir)
+
+    monkeypatch.setattr(webapp, "download_media", fake)
+    start_batch(client, ["https://a", "https://b", "https://c"])
+    assert calls == ["https://a"]
+    assert os.listdir(tmp_path) == []
+
+
+def test_worker_for_missing_job_does_nothing(store):
+    """Checks a worker whose job was deleted before it started just returns."""
+    webapp.run_single("a" * 32, "https://x")
+    webapp.run_batch("b" * 32, ["https://x"])
+
+
+def test_jobs_run_at_most_two_at_a_time(store, monkeypatch):
+    """Checks extra downloads wait their turn instead of all running at once."""
+    monkeypatch.setattr(webapp.threading, "Thread", RealThread)
+    monkeypatch.setattr(webapp, "JOB_SLOTS", threading.BoundedSemaphore(2))
+    running, peak, lock = [0], [0], threading.Lock()
+
+    def fake(url, dtype, out_dir, **kwargs):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.2)
+        with lock:
+            running[0] -= 1
+        return fake_download()(url, dtype, out_dir)
+
+    monkeypatch.setattr(webapp, "download_media", fake)
+    webapp.app.config["TESTING"] = True
+    client = webapp.app.test_client()
+    ids = [start(client).get_json()["job_id"] for _ in range(4)]
+    deadline = time.time() + 5
+    while time.time() < deadline and not all(store.get(i).status == "done" for i in ids):
+        time.sleep(0.05)
+    assert all(store.get(i).status == "done" for i in ids)
+    assert peak[0] == 2
+
+
+def test_download_refused_when_disk_is_low(client, tmp_path, monkeypatch):
+    """Checks new downloads are refused while free disk space is low."""
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    usage = type("U", (), {"free": 100 * 1024 * 1024})()
+    monkeypatch.setattr(webapp.shutil, "disk_usage", lambda path: usage)
+    response = start(client)
+    assert response.status_code == 503
+    assert os.listdir(tmp_path) == []
