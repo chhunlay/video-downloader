@@ -5,6 +5,11 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.8.3] - 2026-10-12
+### Changed
+- Download buttons (Video, Audio, TikTok, Download) use simple outline
+  icons instead of emojis.
+
 ## [0.8.2] - 2026-10-11
 ### Added
 - README header with a centered title, tagline, badges (version,
