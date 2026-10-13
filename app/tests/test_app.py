@@ -751,3 +751,20 @@ def test_files_still_serves_jobs_saved_to_downloads_by_0_10_0(client, store, tmp
     store.update(job.id, status="done", saved_locally=True, files=["clip.mp4"])
     assert client.get(f"/files/{job.id}/clip.mp4").data == b"old-version"
     assert client.get(f"/files/{job.id}/private.pdf").status_code == 404
+
+
+# ---------- Version ----------
+
+def test_version_matches_changelog():
+    """Checks the version shown on the page is the newest CHANGELOG entry, so a bump can't forget it."""
+    import re
+    import version
+    changelog = os.path.join(os.path.dirname(os.path.abspath(webapp.__file__)), "..", "CHANGELOG.md")
+    newest = re.search(r"^## \[(\d+\.\d+\.\d+)\]", open(changelog, encoding="utf-8").read(), re.M).group(1)
+    assert version.__version__ == newest
+
+
+def test_footer_shows_version(client):
+    """Checks the page footer shows the app version."""
+    import version
+    assert f"v{version.__version__}".encode() in client.get("/").data
