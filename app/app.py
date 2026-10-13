@@ -29,6 +29,7 @@ from downloader import (
     validate_trim,
 )
 from jobs import FINAL_STATUSES, JobStore
+from version import __version__
 
 app = Flask(__name__)
 
@@ -325,9 +326,9 @@ def index():
     Serves the main page.
 
     Returns:
-    str: The rendered index.html.
+    str: The rendered index.html, with the app version in the footer.
     """
-    return render_template("index.html")
+    return render_template("index.html", version=__version__)
 
 
 @app.route("/download", methods=["POST"])
