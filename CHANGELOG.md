@@ -5,6 +5,29 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.11.0] - 2026-10-13
+### Changed
+- Phone layout: the thumbnail keeps the video's real shape (16:9, or a
+  height-capped portrait for TikTok/Shorts) with a duration badge, and
+  the header is smaller, so the download buttons show without scrolling.
+- Video is the main button and Audio a secondary outlined one. A single
+  TikTok link downloads without the watermark from the Video button (a
+  note says so); the separate TikTok button now only appears in batch mode.
+- Batch mode is opened with "Paste several links or a playlist" under the
+  link field instead of a Single/Batch switch.
+- Errors are shown in plain words ("This video is private", "This site
+  isn't supported", ...) instead of raw yt-dlp messages.
+- Labels use one style; the trim End field shows the video's length.
+
+### Added
+- Paste and Clear buttons in the link field.
+- A summary on the Options row ("0:30–1:15 · Khmer .srt").
+- A Cancel button while downloading.
+
+### Fixed
+- Accessibility: footer and hint text now meet WCAG AA contrast, every
+  button is at least 44px tall, and the thumbnail has alt text.
+
 ## [0.10.4] - 2026-10-13
 ### Added
 - The app version is shown in the page footer. It comes from

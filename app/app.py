@@ -75,6 +75,39 @@ def clean_error(e):
     return _ERROR_PREFIX_RE.sub("", str(e), count=1).strip() or "Download failed"
 
 
+# Common yt-dlp errors, as (text found in the lowercased error, plain message)
+_FRIENDLY_ERRORS = (
+    ("private video", "This video is private"),
+    ("confirm your age", "This video is age-restricted"),
+    ("unsupported url", "This site isn't supported"),
+    ("video unavailable", "This video is unavailable"),
+    ("this video is unavailable", "This video is unavailable"),
+    ("unable to download webpage", "Couldn't reach the site. Check the link or try again"),
+    ("failed to resolve", "Couldn't reach the site. Check the link or try again"),
+    ("timed out", "Couldn't reach the site. Check the link or try again"),
+    ("http error 403", "The site refused the download. Try again in a moment"),
+    ("requested format is not available", "That quality isn't available for this video"),
+)
+
+
+def friendly_error(e, fallback=None):
+    """
+    Turns an exception into a plain sentence for the page.
+
+    Parameters:
+    e (Exception): The error.
+    fallback (str/None): Message for unrecognised errors; None keeps the cleaned error text.
+
+    Returns:
+    str: e.g. "This video is private".
+    """
+    message = str(e).lower()
+    for hint, text in _FRIENDLY_ERRORS:
+        if hint in message:
+            return text
+    return fallback or clean_error(e)
+
+
 def finish_job(job_id, paths, **fields):
     """
     Marks a job done with its finished files, ready for the browser to fetch.
@@ -234,7 +267,7 @@ def run_single(job_id, url):
             paths.append(subtitle_path_for(path, subtitles["lang"]))
         finish_job(job_id, paths, title=os.path.splitext(os.path.basename(path))[0])
     except Exception as e:
-        store.update(job_id, status="error", error=clean_error(e))
+        store.update(job_id, status="error", error=friendly_error(e))
 
 
 def run_batch(job_id, urls):
@@ -276,7 +309,7 @@ def run_batch(job_id, urls):
             )
             downloaded.append((path, f"{index + 1:02d} - {os.path.basename(path)}"))
         except Exception as e:
-            failed.append({"url": url, "error": clean_error(e)})
+            failed.append({"url": url, "error": friendly_error(e)})
             store.update(job_id, failed_items=list(failed))
 
     if store.get(job_id) is None:
@@ -293,7 +326,7 @@ def run_batch(job_id, urls):
             for path, arcname in downloaded:
                 z.write(path, arcname)
     except Exception as e:
-        store.update(job_id, status="error", error=clean_error(e))
+        store.update(job_id, status="error", error=friendly_error(e))
         return
     finally:
         for index in range(len(urls)):
@@ -465,12 +498,15 @@ def video_info():
             "thumbnail": info.get("thumbnail"),
             "uploader": info.get("uploader"),
             "duration": info.get("duration"),
+            # Lets the page show the thumbnail at the video's real shape
+            "width": info.get("width"),
+            "height": info.get("height"),
             "resolutions": get_resolutions_with_sizes(info),
             "subtitles": get_subtitle_languages(info),
         })
 
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({"error": friendly_error(e, fallback="Video not found or invalid URL")})
 
 
 # Port 5050 because macOS AirPlay takes 5000

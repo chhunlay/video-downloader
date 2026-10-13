@@ -127,12 +127,14 @@ def test_info_returns_preview(client, monkeypatch):
     """Checks /info returns the preview fields, resolutions and subtitle languages."""
     fake_info = {
         "title": "Clip", "thumbnail": "t.jpg", "uploader": "Me", "duration": 10,
+        "width": 1280, "height": 720,
         "formats": [{"height": 720, "vcodec": "avc1", "filesize": 1024 * 1024}],
         "subtitles": {"km": [{"name": "Khmer"}]},
     }
     monkeypatch.setattr(webapp, "get_video_info", lambda url: fake_info)
     data = client.post("/info", data={"url": "https://x"}).get_json()
     assert data["title"] == "Clip"
+    assert (data["width"], data["height"]) == (1280, 720)
     assert data["resolutions"] == [[720, "1.0MB"]]
     assert data["subtitles"] == [{"code": "km", "name": "Khmer", "auto": False, "translated": False}]
 
@@ -142,7 +144,36 @@ def test_info_reports_errors(client, monkeypatch):
     def boom(url):
         raise RuntimeError("Video unavailable")
     monkeypatch.setattr(webapp, "get_video_info", boom)
-    assert client.post("/info", data={"url": "bad"}).get_json() == {"error": "Video unavailable"}
+    assert client.post("/info", data={"url": "bad"}).get_json() == {"error": "This video is unavailable"}
+
+
+def test_info_hides_unknown_errors_behind_a_plain_message(client, monkeypatch):
+    """Checks an unrecognised yt-dlp error isn't shown raw on the page."""
+    def boom(url):
+        raise RuntimeError("ERROR: [generic] x: some internal extractor failure (caused by KeyError('a'))")
+    monkeypatch.setattr(webapp, "get_video_info", boom)
+    assert client.post("/info", data={"url": "x"}).get_json() == {"error": "Video not found or invalid URL"}
+
+
+@pytest.mark.parametrize("message, expected", [
+    ("ERROR: [youtube] abc: Private video. Sign in if you've been granted access", "This video is private"),
+    ("ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate", "This video is age-restricted"),
+    ("ERROR: Unsupported URL: https://example.com/x", "This site isn't supported"),
+    ("ERROR: [youtube] abc: Video unavailable", "This video is unavailable"),
+    ("ERROR: [generic] x: Unable to download webpage: Failed to resolve 'x'", "Couldn't reach the site. Check the link or try again"),
+    ("ERROR: unable to download video data: HTTP Error 403: Forbidden", "The site refused the download. Try again in a moment"),
+    ("ERROR: [youtube] abc: Requested format is not available", "That quality isn't available for this video"),
+    ("No subtitles found for that language", "No subtitles found for that language"),
+])
+def test_friendly_error(message, expected):
+    """
+    Checks common yt-dlp errors become plain sentences, and others are kept (cleaned).
+
+    Parameters:
+    message (str): The raw error text.
+    expected (str): What the page should show.
+    """
+    assert webapp.friendly_error(Exception(message)) == expected
 
 
 def test_download_single_success(client, store, monkeypatch):
@@ -218,7 +249,7 @@ def test_download_failure_sets_error(client, store, monkeypatch):
     job_id = start(client).get_json()["job_id"]
     job = store.get(job_id)
     assert job.status == "error"
-    assert job.error == "Video unavailable"
+    assert job.error == "This video is unavailable"
 
 
 def read_events(response):
@@ -414,7 +445,7 @@ def test_batch_partial_failure(client, store, monkeypatch):
     job = store.get(job_id)
     assert job.status == "done"
     assert sorted(zip_contents(store, job)) == ["01 - Video.mp4", "03 - Video.mp4"]
-    assert job.failed_items == [{"url": "https://b", "error": "Video unavailable"}]
+    assert job.failed_items == [{"url": "https://b", "error": "This video is unavailable"}]
 
 
 def test_batch_all_fail(client, store, monkeypatch):
