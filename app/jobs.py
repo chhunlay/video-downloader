@@ -48,7 +48,8 @@ class Job:
     item_count: int = 1
     failed_items: list = field(default_factory=list)
     created: float = field(default_factory=time.time)
-    # True when the files were moved to ~/Downloads instead of staying in the job folder
+    # Only set by 0.10.0, which moved local downloads to ~/Downloads; kept so
+    # those jobs still load and serve their files
     saved_locally: bool = False
 
     def public(self):
