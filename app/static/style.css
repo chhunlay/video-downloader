@@ -153,11 +153,6 @@ body {
     transition: width 0.3s ease;
 }
 
-.file-link {
-    background: var(--file-btn-bg);
-    color: var(--file-btn-text);
-}
-.file-link:hover { background: var(--file-btn-hover); }
 
 /* Single / Batch switch */
 .seg {
