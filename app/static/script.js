@@ -59,6 +59,7 @@ $('themeToggle').addEventListener('click', () => {
 let mode = 'single';
 let previewOk = false;
 let previewTitle = '';
+let previewIsTikTok = false;
 let previewResolutions = [];  // [[height, sizeStr | null], ...], highest first
 let audioQuality = '320';  // the highest quality is picked unless changed
 let subtitlesEnabled = false;
@@ -91,35 +92,41 @@ function updateActions() {
     $('actions').classList.toggle('hidden', !ready);
 }
 
+const isTikTok = url => /tiktok\.com/i.test(url);
+
+// Buttons fit the link: a single TikTok link downloads without the watermark
+// from the Video button (a note says so); the separate TikTok button is only for batches
+function showDownloadButtons() {
+    $('tiktokNote').classList.toggle('hidden', !(mode === 'single' && previewIsTikTok));
+    setHidden(['videoBtn', 'audioBtn'], false);
+    $('tiktokBtn').classList.toggle('hidden', mode !== 'batch');
+}
+
 // A picker (resolution or audio quality) replaces the Video/Audio/TikTok buttons while open
 const PICKERS = ['resolutionPicker', 'audioPicker'];
 
 function openPicker(id) {
     PICKERS.forEach(p => $(p).classList.toggle('hidden', p !== id));
-    setHidden(['videoBtn', 'audioBtn', 'tiktokBtn'], true);
+    setHidden(['videoBtn', 'audioBtn', 'tiktokBtn', 'tiktokNote'], true);
 }
 
 function closePickers() {
     setHidden(PICKERS, true);
-    setHidden(['videoBtn', 'audioBtn', 'tiktokBtn'], false);
+    showDownloadButtons();
 }
 
 function setMode(newMode) {
     mode = newMode;
-    $('modeSingle').classList.toggle('active', mode === 'single');
-    $('modeBatch').classList.toggle('active', mode === 'batch');
     $('singleInput').classList.toggle('hidden', mode === 'batch');
     $('batchInput').classList.toggle('hidden', mode === 'single');
     // Trim and subtitles only make sense for one known video, so batch has no options
     $('optionsToggle').classList.toggle('hidden', mode === 'batch');
-    if (mode === 'batch') {
-        $('optionsPanel').classList.add('hidden');
-        $('optionsChevron').classList.remove('rotate-180');
-    }
+    if (mode === 'batch') setOptionsOpen(false);
     $('subtitleOptions').classList.toggle('hidden', mode === 'batch' || $('subLang').options.length === 0);
     closePickers();
     hideResults();
     if (mode === 'single' && $('url').value) $('url').dispatchEvent(new Event('input'));
+    (mode === 'batch' ? $('urls') : $('url')).focus();
 }
 
 // Browsers restore old input on refresh/back, so start clean every time
@@ -127,15 +134,62 @@ function resetForm() {
     $('url').value = '';
     $('urls').value = '';
     updateLinkCount();
+    updateInputButtons();
     hideResults();
     setFetching(false);
 }
 
-// ---------- Options ----------
-function toggleOptions() {
-    const open = $('optionsPanel').classList.toggle('hidden') === false;
-    $('optionsChevron').classList.toggle('rotate-180', open);
+// ---------- Paste / clear ----------
+const canPaste = !!(navigator.clipboard && navigator.clipboard.readText);
+
+function updateInputButtons() {
+    const hasText = $('url').value.length > 0;
+    $('clearBtn').classList.toggle('hidden', !hasText);
+    $('pasteBtn').classList.toggle('hidden', hasText || !canPaste);
 }
+
+async function pasteLink() {
+    try {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (!text) return;
+        $('url').value = text;
+        $('url').dispatchEvent(new Event('input'));
+    } catch (e) {
+        $('url').focus();  // permission refused: let the user paste by hand
+    }
+}
+
+function clearLink() {
+    $('url').value = '';
+    $('url').dispatchEvent(new Event('input'));
+    $('url').focus();
+}
+
+// ---------- Options ----------
+function setOptionsOpen(open) {
+    $('optionsPanel').classList.toggle('hidden', !open);
+    $('optionsChevron').classList.toggle('rotate-180', open);
+    $('optionsToggle').setAttribute('aria-expanded', String(open));
+}
+
+function toggleOptions() {
+    setOptionsOpen($('optionsPanel').classList.contains('hidden'));
+}
+
+// One line telling what the closed Options panel will do, e.g. "0:30–1:15 · Khmer .srt"
+function updateOptionsSummary() {
+    const start = $('trimStart').value.trim();
+    const end = $('trimEnd').value.trim();
+    const trim = start || end ? `${start || '0:00'}–${end || 'end'}` : 'Full video';
+    let subs = 'No subtitles';
+    const lang = $('subLang').selectedOptions[0];
+    if (subtitlesEnabled && lang) {
+        subs = `${lang.textContent.replace(/ \(auto.*\)$/, '')} ${subMode === 'burn' ? 'burned in' : '.srt'}`;
+    }
+    $('optionsSummary').textContent = `${trim} · ${subs}`;
+}
+['trimStart', 'trimEnd'].forEach(id => $(id).addEventListener('input', updateOptionsSummary));
+$('subLang').addEventListener('change', updateOptionsSummary);
 
 function bindChips(containerId, onSelect) {
     $(containerId).addEventListener('click', e => {
@@ -145,13 +199,14 @@ function bindChips(containerId, onSelect) {
         onSelect(chip.dataset.value);
     });
 }
-bindChips('subModeChips', value => { subMode = value; });
+bindChips('subModeChips', value => { subMode = value; updateOptionsSummary(); });
 
 function setSubtitlesEnabled(enabled) {
     subtitlesEnabled = enabled;
     $('subToggle').classList.toggle('on', enabled);
     $('subToggle').setAttribute('aria-checked', String(enabled));
     $('subDetails').classList.toggle('hidden', !enabled);
+    updateOptionsSummary();
 }
 
 function renderSubtitles(languages) {
@@ -207,9 +262,35 @@ function renderResolutions(resolutions, limitedNote) {
     $('resolutionLimitedNote').classList.toggle('hidden', !limitedNote || !(resolutions.length <= 1 || maxRes < 480));
 }
 
+function formatDuration(seconds) {
+    const s = Math.round(seconds);
+    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = String(s % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+// Landscape fills the width; portrait (TikTok, Shorts) is capped in height and centered
+const PORTRAIT_MAX_HEIGHT = 320;
+
+function showThumbnail(data) {
+    const w = data.width || 16, h = data.height || 9;
+    const wrap = $('thumbWrap');
+    wrap.style.aspectRatio = `${w} / ${h}`;
+    wrap.style.width = h > w ? `${Math.round(PORTRAIT_MAX_HEIGHT * w / h)}px` : '100%';
+    // No picture: leave the dark box instead of a broken-image icon
+    $('thumbnail').classList.toggle('hidden', !data.thumbnail);
+    $('thumbnail').src = data.thumbnail || '';
+    $('thumbnail').alt = data.title ? `Thumbnail: ${data.title}` : 'Video thumbnail';
+
+    const badge = $('durationBadge');
+    badge.classList.toggle('hidden', !data.duration);
+    if (data.duration) badge.textContent = formatDuration(data.duration);
+    $('trimEnd').placeholder = data.duration ? `End (max ${formatDuration(data.duration)})` : 'End (e.g. 1:30)';
+}
+
 $('url').addEventListener('input', () => {
     clearTimeout(debounceTimer);
     const url = $('url').value;
+    updateInputButtons();
 
     hideResults();
     if (!url) return;
@@ -223,17 +304,20 @@ $('url').addEventListener('input', () => {
             setFetching(false);
 
             if (data.error) {
-                showError('Video not found or invalid URL');
+                showError(data.error);
                 return;
             }
 
             $('videoInfo').classList.remove('hidden');
-            $('thumbnail').src = data.thumbnail;
+            showThumbnail(data);
             $('videoTitle').innerText = data.title;
-            $('videoUploader').innerText = "By " + data.uploader;
+            $('videoUploader').innerText = data.uploader ? "By " + data.uploader : '';
 
             previewOk = true;
             previewTitle = data.title || '';
+            previewIsTikTok = isTikTok(url);
+            $('trimStart').value = '';
+            $('trimEnd').value = '';
             previewResolutions = data.resolutions || [];
             closePickers();
             renderSubtitles(data.subtitles);
@@ -250,6 +334,10 @@ $('url').addEventListener('input', () => {
 // ---------- Resolution picker ----------
 // "Video" opens the picker, or downloads at best quality when there's nothing to pick
 function handleVideoClick() {
+    if (mode === 'single' && previewIsTikTok) {
+        startDownload('tiktok');
+        return;
+    }
     const resolutions = mode === 'batch' ? BATCH_RESOLUTIONS : previewResolutions;
     if (resolutions.length === 0) {
         $('resolutionSelect').value = '';
@@ -287,6 +375,7 @@ const STATUS_LABELS = {
     interrupted: 'Interrupted',
 };
 let activeSource = null;
+let activeJobId = null;
 
 function saveJobFiles(job) {
     // Off-DOM links start the browser downloads; spaced out so browsers allow several
@@ -315,6 +404,8 @@ function showProgress(job) {
     $('status').textContent = text;
     $('status').title = text;
 
+    $('cancelBtn').classList.toggle('hidden', finished || failed);
+
     const showCounter = job.kind === 'batch' && !finished && !failed;
     $('batchCounter').classList.toggle('hidden', !showCounter);
     $('batchCounter').textContent = `${job.item_index + 1} / ${job.item_count}`;
@@ -329,10 +420,25 @@ function showProgress(job) {
     }));
 }
 
+// Deleting a running job stops it on the server and frees its files
+async function cancelDownload() {
+    if (!activeJobId) return;
+    const jobId = activeJobId;
+    activeJobId = null;
+    if (activeSource) activeSource.close();
+    $('cancelBtn').classList.add('hidden');
+    $('statusIcon').innerHTML = icon('x');
+    $('statusIcon').className = 'shrink-0 text-muted';
+    $('status').textContent = 'Cancelled';
+    try { await fetch(`/jobs/${jobId}`, {method: 'DELETE'}); } catch (e) {}
+    removeFromHistory(jobId);
+}
+
 function trackJob(jobId) {
     if (activeSource) activeSource.close();
     const evt = new EventSource(`/progress/${jobId}`);
     activeSource = evt;
+    activeJobId = jobId;
 
     evt.onmessage = e => {
         const job = JSON.parse(e.data);
@@ -345,6 +451,7 @@ function trackJob(jobId) {
         }
         if (job.status === 'done' || job.status === 'error' || job.status === 'interrupted') {
             evt.close();
+            activeJobId = null;
             refreshHistory();
         }
     };
@@ -374,6 +481,7 @@ async function startDownload(dtype) {
     setHidden(['errorMessage'], true);
     $('progressCard').classList.remove('hidden');
     showProgress({status: 'queued', percent: 0, kind: mode, item_index: 0, item_count: 1, failed_items: []});
+    $('cancelBtn').classList.add('hidden');  // nothing to cancel until the server has a job
 
     let response, data;
     try {
