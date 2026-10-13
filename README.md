@@ -30,7 +30,7 @@ Web app:
 - **Video, audio or TikTok without watermark**, with a resolution picker
   showing each option's size.
 - **Audio quality** - picked after clicking Audio: MP3 at 128, 192 or
-  320 kbps, or M4A, with cover art.
+  320 kbps (320 is selected by default), or M4A, with cover art.
 - **Trim** - type a start and/or end time (`90`, `1:30`, `1:02:03`) and
   only that part is downloaded.
 - **Subtitles** - off unless you switch them on. Pick a language the video
