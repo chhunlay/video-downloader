@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -31,8 +32,11 @@ from jobs import FINAL_STATUSES, JobStore
 
 app = Flask(__name__)
 
-# Absolute, so it doesn't depend on the folder the server was started from
-DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+# Working folder for downloads until the browser saves them (kept 24 h). Outside
+# the project so nothing piles up in it: the user cache on macOS, else temp.
+_CACHE_ROOT = (os.path.expanduser("~/Library/Caches") if sys.platform == "darwin"
+               else tempfile.gettempdir())
+DOWNLOAD_DIR = os.path.join(_CACHE_ROOT, "Video Downloader")
 
 store = JobStore(DOWNLOAD_DIR)
 
@@ -50,7 +54,7 @@ JOB_SLOTS = threading.BoundedSemaphore(2)
 # New downloads are refused below this much free disk space
 MIN_FREE_BYTES = 2 * 1024 ** 3
 
-# Downloads made on this Mac are moved here and kept; other devices fetch theirs through the browser
+# 0.10.0 moved local downloads here; still read so those history entries keep working
 SAVE_DIR = os.path.expanduser("~/Downloads")
 
 # yt-dlp prefixes errors with "ERROR: " and often "[site] video-id: "
@@ -70,78 +74,19 @@ def clean_error(e):
     return _ERROR_PREFIX_RE.sub("", str(e), count=1).strip() or "Download failed"
 
 
-def is_local_request(req):
-    """
-    Checks whether a request comes from a browser on this Mac.
-
-    The Cloudflare tunnel also connects from localhost, so its visitors are
-    told apart by the CF-Connecting-IP header it adds.
-
-    Parameters:
-    req (flask.Request): The request.
-
-    Returns:
-    bool: True for this Mac's own browser.
-    """
-    return req.remote_addr in ("127.0.0.1", "::1") and "CF-Connecting-IP" not in req.headers
-
-
-def unique_path(folder, name):
-    """
-    Finds a free file name in a folder, adding " (1)", " (2)", ... when taken.
-
-    Parameters:
-    folder (str): The folder.
-    name (str): The wanted file name.
-
-    Returns:
-    str: A path in folder that doesn't exist yet.
-    """
-    stem, ext = os.path.splitext(name)
-    path, n = os.path.join(folder, name), 1
-    while os.path.exists(path):
-        path = os.path.join(folder, f"{stem} ({n}){ext}")
-        n += 1
-    return path
-
-
-def move_to_downloads(paths):
-    """
-    Moves finished files into SAVE_DIR without overwriting anything there.
-
-    Parameters:
-    paths (list): Paths of the finished files.
-
-    Returns:
-    list: The file names they got in SAVE_DIR, in the same order.
-    """
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    names = []
-    for path in paths:
-        destination = unique_path(SAVE_DIR, os.path.basename(path))
-        shutil.move(path, destination)
-        names.append(os.path.basename(destination))
-    return names
-
-
 def finish_job(job_id, paths, **fields):
     """
-    Marks a job done, first moving its files to ~/Downloads if it was started on this Mac.
+    Marks a job done with its finished files, ready for the browser to fetch.
 
     Parameters:
     job_id (str): The job.
     paths (list): Paths of the finished files, main file first.
     **fields: Extra job fields to set (e.g. title).
     """
-    job = store.get(job_id)
-    if job is None:
+    if store.get(job_id) is None:
         return
-    if job.options.get("save_locally"):
-        store.update(job_id, status="done", percent=100, saved_locally=True,
-                     files=move_to_downloads(paths), **fields)
-    else:
-        store.update(job_id, status="done", percent=100,
-                     files=[os.path.basename(p) for p in paths], **fields)
+    store.update(job_id, status="done", percent=100,
+                 files=[os.path.basename(p) for p in paths], **fields)
 
 
 def parse_download_form(form):
@@ -402,8 +347,7 @@ def download():
     if shutil.disk_usage(store.root_dir).free < MIN_FREE_BYTES:
         return jsonify({"error": "The server is low on disk space, try again later"}), 503
 
-    options = {**parsed["options"], "save_locally": is_local_request(request)}
-    job = store.create(parsed["mode"], parsed["dtype"], options)
+    job = store.create(parsed["mode"], parsed["dtype"], parsed["options"])
     if parsed["mode"] == "batch":
         worker, target = run_batch, parsed["urls"]
     else:
@@ -444,8 +388,8 @@ def job_file(job_id, name):
     """
     Sends one of a job's files as a download.
 
-    Files saved to ~/Downloads are served from there, but only the ones this
-    job created; nothing else in Downloads is reachable.
+    Jobs from 0.10.0 that were moved to ~/Downloads are served from there, but
+    only the files they created; nothing else in Downloads is reachable.
 
     Parameters:
     job_id (str): The job id.

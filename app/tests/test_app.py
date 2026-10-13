@@ -707,7 +707,7 @@ def test_main_without_cloudflared_still_serves(fake_startup, monkeypatch):
     assert fake_startup["run"]["port"] == 5050
 
 
-# ---------- Saving to ~/Downloads on this Mac ----------
+# ---------- Browser downloads and the working folder ----------
 
 def start_local(client, **form):
     """
@@ -724,79 +724,30 @@ def start_local(client, **form):
     return client.post("/download", data=data, environ_base={"REMOTE_ADDR": "127.0.0.1"})
 
 
-def test_local_download_goes_to_downloads(client, store, tmp_path, monkeypatch):
-    """Checks a download made on this Mac lands in ~/Downloads, not the job folder."""
-    monkeypatch.setattr(webapp, "download_media", fake_download(extra_files=("clip.km.srt",)))
-    job_id = start_local(client, sub_lang="km", sub_mode="srt").get_json()["job_id"]
+def test_local_download_is_fetched_by_the_browser(client, store, tmp_path, monkeypatch):
+    """Checks a download on this Mac waits in its job folder so the browser can save it (and show its popup)."""
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    job_id = start_local(client).get_json()["job_id"]
     job = store.get(job_id)
-    assert job.status == "done"
-    assert job.saved_locally is True
-    assert job.files == ["clip.mp4", "clip.km.srt"]
-    downloads = tmp_path / "Downloads"
-    assert sorted(os.listdir(downloads)) == ["clip.km.srt", "clip.mp4"]
-    assert os.listdir(store.folder(job_id)) == ["job.json"]
+    assert job.saved_locally is False
+    assert "clip.mp4" in os.listdir(store.folder(job_id))
+    assert not (tmp_path / "Downloads").exists()
+    assert client.get(f"/files/{job_id}/clip.mp4").data == b"bytes-clip.mp4"
 
 
-def test_local_download_never_overwrites(client, store, tmp_path, monkeypatch):
-    """Checks an existing file in ~/Downloads is kept and the new one gets a number."""
+def test_working_folder_is_outside_the_project():
+    """Checks downloads no longer pile up inside the project's app/downloads folder."""
+    app_dir = os.path.dirname(os.path.abspath(webapp.__file__))
+    assert not os.path.abspath(webapp.DOWNLOAD_DIR).startswith(app_dir + os.sep)
+
+
+def test_files_still_serves_jobs_saved_to_downloads_by_0_10_0(client, store, tmp_path):
+    """Checks history entries from 0.10.0 (files in ~/Downloads) still work, and nothing else there is reachable."""
     downloads = tmp_path / "Downloads"
     downloads.mkdir()
-    (downloads / "clip.mp4").write_bytes(b"old")
-    monkeypatch.setattr(webapp, "download_media", fake_download())
-    job_id = start_local(client).get_json()["job_id"]
-    assert store.get(job_id).files == ["clip (1).mp4"]
-    assert (downloads / "clip.mp4").read_bytes() == b"old"
-    assert store.get(job_id).title == "clip"
-
-
-@pytest.mark.parametrize("environ, headers", [
-    ({"REMOTE_ADDR": "192.168.1.5"}, {}),                    # phone on the same Wi-Fi
-    ({"REMOTE_ADDR": "127.0.0.1"}, {"CF-Connecting-IP": "1.2.3.4"}),  # visitor via the tunnel
-])
-def test_other_devices_are_not_saved_to_this_mac(client, store, tmp_path, monkeypatch, environ, headers):
-    """
-    Checks downloads from other devices stay in the job folder for the browser to fetch.
-
-    Parameters:
-    client (flask.testing.FlaskClient): The test client.
-    store (JobStore): The temp store.
-    tmp_path (pathlib.Path): The temp folder.
-    monkeypatch (pytest.MonkeyPatch): pytest's patcher.
-    environ (dict): WSGI environ overrides.
-    headers (dict): Request headers.
-    """
-    monkeypatch.setattr(webapp, "download_media", fake_download())
-    response = client.post("/download", data={"url": "https://x", "type": "video"},
-                           environ_base=environ, headers=headers)
-    job = store.get(response.get_json()["job_id"])
-    assert job.saved_locally is False
-    assert "clip.mp4" in os.listdir(store.folder(job.id))
-    assert not (tmp_path / "Downloads").exists()
-
-
-def test_files_serves_only_the_jobs_own_downloads(client, store, tmp_path, monkeypatch):
-    """Checks a local job's file is served from ~/Downloads, but nothing else there is."""
-    monkeypatch.setattr(webapp, "download_media", fake_download())
-    job_id = start_local(client).get_json()["job_id"]
-    (tmp_path / "Downloads" / "private.pdf").write_bytes(b"secret")
-    assert client.get(f"/files/{job_id}/clip.mp4").data == b"bytes-clip.mp4"
-    assert client.get(f"/files/{job_id}/private.pdf").status_code == 404
-
-
-def test_removing_local_job_keeps_the_file(client, store, tmp_path, monkeypatch):
-    """Checks removing a download from history never deletes it from ~/Downloads."""
-    monkeypatch.setattr(webapp, "download_media", fake_download())
-    job_id = start_local(client).get_json()["job_id"]
-    assert client.delete(f"/jobs/{job_id}").status_code == 204
-    assert (tmp_path / "Downloads" / "clip.mp4").exists()
-
-
-def test_local_batch_zip_goes_to_downloads(client, store, tmp_path, monkeypatch):
-    """Checks a batch made on this Mac puts its zip in ~/Downloads."""
-    monkeypatch.setattr(webapp, "download_media", fake_batch_download())
-    response = client.post("/download", data={"mode": "batch", "type": "audio", "urls": "https://a https://b"},
-                           environ_base={"REMOTE_ADDR": "127.0.0.1"})
-    job = store.get(response.get_json()["job_id"])
-    assert job.saved_locally is True
-    assert os.listdir(tmp_path / "Downloads") == job.files
-    assert os.listdir(store.folder(job.id)) == ["job.json"]
+    (downloads / "clip.mp4").write_bytes(b"old-version")
+    (downloads / "private.pdf").write_bytes(b"secret")
+    job = store.create("single", "video", {})
+    store.update(job.id, status="done", saved_locally=True, files=["clip.mp4"])
+    assert client.get(f"/files/{job.id}/clip.mp4").data == b"old-version"
+    assert client.get(f"/files/{job.id}/private.pdf").status_code == 404
