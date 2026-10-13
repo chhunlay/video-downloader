@@ -109,12 +109,20 @@
 
                 <!-- Subtitles (single only, when the video has any) -->
                 <div id="subtitleOptions" class="hidden">
-                    <label class="block mb-1.5 text-xs font-semibold text-muted">Subtitles <span class="font-normal text-faint">(video and TikTok)</span></label>
-                    <select id="subLang" class="url-input w-full py-2 px-3 rounded-lg outline-none text-sm mb-2"></select>
-                    <div id="subModeChips" class="grid grid-cols-3 gap-2">
-                        <button type="button" class="chip selected" data-value="off">Off</button>
-                        <button type="button" class="chip" data-value="srt">.srt file</button>
-                        <button type="button" class="chip" data-value="burn">Burn in</button>
+                    <div class="flex items-center justify-between">
+                        <label for="subToggle" class="text-xs font-semibold text-muted">Subtitles <span class="font-normal text-faint">(video and TikTok)</span></label>
+                        <!-- Off for every new video; on shows the language and how to add them -->
+                        <button id="subToggle" type="button" role="switch" aria-checked="false"
+                                class="switch" onclick="setSubtitlesEnabled(!subtitlesEnabled)">
+                            <span class="switch-knob"></span>
+                        </button>
+                    </div>
+                    <div id="subDetails" class="hidden mt-2">
+                        <select id="subLang" class="url-input w-full py-2 px-3 rounded-lg outline-none text-sm mb-2"></select>
+                        <div id="subModeChips" class="grid grid-cols-2 gap-2">
+                            <button type="button" class="chip selected" data-value="srt">.srt file</button>
+                            <button type="button" class="chip" data-value="burn">Burn in</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -123,7 +131,7 @@
             <div id="downloadButtons" class="grid grid-cols-2 gap-2.5 mt-4">
                 <button id="videoBtn" onclick="handleVideoClick()"
                         class="action-btn col-span-1 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
-                    <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/></svg>
+                    <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 9 5 3-5 3z"/></svg>
                     Video
                 </button>
                 <button id="audioBtn" onclick="openPicker('audioPicker')"
@@ -179,7 +187,7 @@
 
                 <button id="tiktokBtn" onclick="startDownload('tiktok')"
                         class="action-btn col-span-2 flex items-center justify-center gap-2 bg-gradient-to-r from-pink-500 to-fuchsia-500 hover:from-pink-400 hover:to-fuchsia-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-pink-500/20">
-                    <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 9 5 3-5 3z"/></svg>
+                    <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>
                     TikTok — No Watermark
                 </button>
             </div>
