@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.10.3-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.4-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -137,6 +137,7 @@ PyInstaller) - no Python install needed on the machine that runs it.
 app/
   app.py                 Flask web app
   jobs.py                Per-download jobs: one folder + job.json each, 24 h cleanup
+  version.py             App version shown in the page footer (matches CHANGELOG.md)
   telegram_bot.py        Telegram bot
   downloader.py          Shared yt-dlp/ffmpeg download + re-encode logic
   desktop_app.py         pywebview wrapper for the Windows build
