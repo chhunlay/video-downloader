@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.10.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.2-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -30,7 +30,7 @@ Web app:
 - **Video, audio or TikTok without watermark**, with a resolution picker
   showing each option's size.
 - **Audio quality** - picked after clicking Audio: MP3 at 128, 192 or
-  320 kbps, or M4A, with cover art.
+  320 kbps (320 is selected by default), or M4A, with cover art.
 - **Trim** - type a start and/or end time (`90`, `1:30`, `1:02:03`) and
   only that part is downloaded.
 - **Subtitles** - off unless you switch them on. Pick a language the video
