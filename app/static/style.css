@@ -223,3 +223,32 @@ select.url-input option {
     color: var(--file-btn-text);
 }
 .history-btn.primary:hover { background: var(--file-btn-hover); }
+
+/* Subtitles on/off switch */
+.switch {
+    position: relative;
+    width: 2.5rem;
+    height: 1.5rem;
+    border-radius: 9999px;
+    background: var(--track-bg);
+    border: 1px solid var(--input-border);
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.switch-knob {
+    position: absolute;
+    top: 0.1875rem;
+    left: 0.1875rem;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 9999px;
+    background: var(--text-muted);
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+.switch.on {
+    background: rgba(99, 102, 241, 0.9);
+    border-color: rgba(129, 140, 248, 0.8);
+}
+.switch.on .switch-knob {
+    transform: translateX(1rem);
+    background: #ffffff;
+}
