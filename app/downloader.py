@@ -466,6 +466,9 @@ def validate_trim(start, end, duration):
 
 # ---------- Subtitles ----------
 
+# Auto-translated captions offered for every video, on top of its own languages
+TRANSLATION_LANGUAGES = ("en", "km")
+
 _SRT_TIME_RE = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{3})")
 
 
@@ -473,22 +476,23 @@ def get_subtitle_languages(info):
     """
     Lists the subtitle languages a video offers.
 
-    Manual tracks come first. Auto captions are limited to the video's own
-    language, since YouTube auto-translates into 100+ languages.
+    Manual tracks come first, then auto captions in the video's own language,
+    then YouTube's auto-translations into TRANSLATION_LANGUAGES (it offers
+    100+ translations, so the rest are left out).
 
     Parameters:
     info (dict): yt-dlp info dict.
 
     Returns:
-    list: {"code", "name", "auto"} dicts, each group sorted by name.
+    list: {"code", "name", "auto", "translated"} dicts, each group sorted by name.
     """
-    def entries(tracks, auto, keep):
+    def entries(tracks, auto, keep, translated=False):
         found = []
         for code, formats in (tracks or {}).items():
             if code == "live_chat" or not keep(code):
                 continue
-            name = (formats[0].get("name") if formats else None) or code
-            found.append({"code": code, "name": name, "auto": auto})
+            name = next((f["name"] for f in formats or [] if f.get("name")), code)
+            found.append({"code": code, "name": name, "auto": auto, "translated": translated})
         return sorted(found, key=lambda t: t["name"])
 
     language = info.get("language")
@@ -496,8 +500,12 @@ def get_subtitle_languages(info):
     def is_original(code):
         return code == language if language else code.endswith("-orig")
 
+    auto_tracks = info.get("automatic_captions")
     return (entries(info.get("subtitles"), False, lambda code: True)
-            + entries(info.get("automatic_captions"), True, is_original))
+            + entries(auto_tracks, True, is_original)
+            + entries(auto_tracks, True,
+                      lambda code: code in TRANSLATION_LANGUAGES and not is_original(code),
+                      translated=True))
 
 
 def subtitle_path_for(video_path, lang):
