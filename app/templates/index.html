@@ -168,8 +168,8 @@
                     <label class="block mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Audio quality</label>
                     <div id="audioCards" class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         <button type="button" class="res-card" data-value="128" onclick="selectAudioQuality('128')"><span class="res-card-label">128 kbps</span><span class="res-card-size">smaller</span></button>
-                        <button type="button" class="res-card selected" data-value="192" onclick="selectAudioQuality('192')"><span class="res-card-label">192 kbps</span><span class="res-card-size">default</span></button>
-                        <button type="button" class="res-card" data-value="320" onclick="selectAudioQuality('320')"><span class="res-card-label">320 kbps</span><span class="res-card-size">best</span></button>
+                        <button type="button" class="res-card" data-value="192" onclick="selectAudioQuality('192')"><span class="res-card-label">192 kbps</span><span class="res-card-size">standard</span></button>
+                        <button type="button" class="res-card selected" data-value="320" onclick="selectAudioQuality('320')"><span class="res-card-label">320 kbps</span><span class="res-card-size">best</span></button>
                         <button type="button" class="res-card" data-value="m4a" onclick="selectAudioQuality('m4a')"><span class="res-card-label">M4A</span><span class="res-card-size">AAC</span></button>
                     </div>
                     <div class="grid grid-cols-3 gap-2 mt-2.5">
@@ -209,12 +209,6 @@
             <ul id="failedItems" class="hidden mt-3 space-y-1 text-xs text-rose-400"></ul>
         </div>
 
-        <!-- Shown when a download finishes, in case the browser blocked the automatic save -->
-        <button id="saveAgain" type="button"
-                class="file-link hidden fade-up mt-5 w-full flex items-center justify-center gap-2 font-bold py-3 px-4 rounded-xl transition-colors">
-            <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/></svg>
-            Save File
-        </button>
     </div>
 
     <!-- History: remembered in this browser only -->
