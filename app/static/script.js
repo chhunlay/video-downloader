@@ -60,7 +60,7 @@ let mode = 'single';
 let previewOk = false;
 let previewTitle = '';
 let previewResolutions = [];  // [[height, sizeStr | null], ...], highest first
-let audioQuality = '192';
+let audioQuality = '320';  // the highest quality is picked unless changed
 let subtitlesEnabled = false;
 let subMode = 'srt';
 
@@ -80,7 +80,7 @@ function showError(message) {
 }
 
 function hideResults() {
-    setHidden(['videoInfo', 'errorMessage', 'progressCard', 'saveAgain', 'failedItems'], true);
+    setHidden(['videoInfo', 'errorMessage', 'progressCard', 'failedItems'], true);
     previewOk = false;
     updateActions();
 }
@@ -338,12 +338,10 @@ function trackJob(jobId) {
         const job = JSON.parse(e.data);
         showProgress(job);
 
-        // Files made on this Mac are already in ~/Downloads, so the browser doesn't save a copy
+        // Jobs from 0.10.0 already put their files in ~/Downloads, so only the rest are saved here
         if (job.status === 'done' && !job.saved_locally) {
             evt.close();
             saveJobFiles(job);
-            $('saveAgain').onclick = () => saveJobFiles(job);
-            $('saveAgain').classList.remove('hidden');
         }
         if (job.status === 'done' || job.status === 'error' || job.status === 'interrupted') {
             evt.close();
@@ -373,7 +371,7 @@ async function startDownload(dtype) {
         }
     }
 
-    setHidden(['errorMessage', 'saveAgain'], true);
+    setHidden(['errorMessage'], true);
     $('progressCard').classList.remove('hidden');
     showProgress({status: 'queued', percent: 0, kind: mode, item_index: 0, item_count: 1, failed_items: []});
 
