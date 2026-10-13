@@ -5,6 +5,15 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.10.2] - 2026-10-13
+### Changed
+- The audio quality picker selects 320 kbps (the highest) by default
+  instead of 192 kbps.
+
+### Removed
+- The "Save File" button under a finished download. The browser's own
+  download popup does the job; History's Save button still re-downloads.
+
 ## [0.10.1] - 2026-10-13
 ### Fixed
 - The browser's download popup is back. 0.10.0 moved downloads made on
