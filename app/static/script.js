@@ -90,10 +90,17 @@ function updateActions() {
     $('actions').classList.toggle('hidden', !ready);
 }
 
-// The resolution picker replaces the Video/Audio/TikTok buttons while open
-function setPickerOpen(open) {
-    $('resolutionPicker').classList.toggle('hidden', !open);
-    setHidden(['videoBtn', 'audioBtn', 'tiktokBtn'], open);
+// A picker (resolution or audio quality) replaces the Video/Audio/TikTok buttons while open
+const PICKERS = ['resolutionPicker', 'audioPicker'];
+
+function openPicker(id) {
+    PICKERS.forEach(p => $(p).classList.toggle('hidden', p !== id));
+    setHidden(['videoBtn', 'audioBtn', 'tiktokBtn'], true);
+}
+
+function closePickers() {
+    setHidden(PICKERS, true);
+    setHidden(['videoBtn', 'audioBtn', 'tiktokBtn'], false);
 }
 
 function setMode(newMode) {
@@ -102,10 +109,14 @@ function setMode(newMode) {
     $('modeBatch').classList.toggle('active', mode === 'batch');
     $('singleInput').classList.toggle('hidden', mode === 'batch');
     $('batchInput').classList.toggle('hidden', mode === 'single');
-    // Trim and subtitles only make sense for one known video
-    $('trimOptions').classList.toggle('hidden', mode === 'batch');
+    // Trim and subtitles only make sense for one known video, so batch has no options
+    $('optionsToggle').classList.toggle('hidden', mode === 'batch');
+    if (mode === 'batch') {
+        $('optionsPanel').classList.add('hidden');
+        $('optionsChevron').classList.remove('rotate-180');
+    }
     $('subtitleOptions').classList.toggle('hidden', mode === 'batch' || $('subLang').options.length === 0);
-    setPickerOpen(false);
+    closePickers();
     hideResults();
     if (mode === 'single' && $('url').value) $('url').dispatchEvent(new Event('input'));
 }
@@ -133,7 +144,6 @@ function bindChips(containerId, onSelect) {
         onSelect(chip.dataset.value);
     });
 }
-bindChips('qualityChips', value => { audioQuality = value; });
 bindChips('subModeChips', value => { subMode = value; });
 
 function renderSubtitles(languages) {
@@ -216,7 +226,7 @@ $('url').addEventListener('input', () => {
             previewOk = true;
             previewTitle = data.title || '';
             previewResolutions = data.resolutions || [];
-            setPickerOpen(false);
+            closePickers();
             renderSubtitles(data.subtitles);
             updateActions();
         })
@@ -239,7 +249,7 @@ function handleVideoClick() {
     }
     $('resolutionLabel').textContent = mode === 'batch' ? 'Max resolution' : 'Resolution';
     renderResolutions(resolutions, mode === 'single');
-    setPickerOpen(true);
+    openPicker('resolutionPicker');
 }
 
 function selectResolution(value) {
@@ -249,8 +259,11 @@ function selectResolution(value) {
     });
 }
 
-function hideResolutionPicker() {
-    setPickerOpen(false);
+function selectAudioQuality(value) {
+    audioQuality = value;
+    document.querySelectorAll('#audioCards .res-card').forEach(card => {
+        card.classList.toggle('selected', card.dataset.value === value);
+    });
 }
 
 // ---------- Download ----------
@@ -368,7 +381,7 @@ async function startDownload(dtype) {
         return;
     }
 
-    setPickerOpen(false);
+    closePickers();
     addToHistory({
         id: data.job_id,
         title: mode === 'batch' ? '' : previewTitle,
