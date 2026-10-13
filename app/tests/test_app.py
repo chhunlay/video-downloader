@@ -14,6 +14,9 @@ from jobs import JobStore
 # Captured before any fixture swaps threading.Thread for InlineThread
 RealThread = threading.Thread
 
+# A visitor on another device; downloads from this Mac go to ~/Downloads instead
+REMOTE_VISITOR = "203.0.113.9"
+
 
 class InlineThread:
     """Runs the target right away instead of on a real thread."""
@@ -54,6 +57,8 @@ def store(tmp_path, monkeypatch):
 
     # Tests that download replace this with a fake; the rest must never hit the network
     monkeypatch.setattr(webapp, "download_media", no_real_downloads)
+    # Never touch the real ~/Downloads
+    monkeypatch.setattr(webapp, "SAVE_DIR", str(tmp_path / "Downloads"))
     return job_store
 
 
@@ -108,7 +113,7 @@ def start(client, **form):
     flask.Response: The /download response.
     """
     data = {"url": "https://x", "type": "video", **form}
-    return client.post("/download", data=data)
+    return client.post("/download", data=data, environ_base={"REMOTE_ADDR": REMOTE_VISITOR})
 
 
 def test_index_page(client):
@@ -122,14 +127,16 @@ def test_info_returns_preview(client, monkeypatch):
     """Checks /info returns the preview fields, resolutions and subtitle languages."""
     fake_info = {
         "title": "Clip", "thumbnail": "t.jpg", "uploader": "Me", "duration": 10,
+        "width": 1280, "height": 720,
         "formats": [{"height": 720, "vcodec": "avc1", "filesize": 1024 * 1024}],
         "subtitles": {"km": [{"name": "Khmer"}]},
     }
     monkeypatch.setattr(webapp, "get_video_info", lambda url: fake_info)
     data = client.post("/info", data={"url": "https://x"}).get_json()
     assert data["title"] == "Clip"
+    assert (data["width"], data["height"]) == (1280, 720)
     assert data["resolutions"] == [[720, "1.0MB"]]
-    assert data["subtitles"] == [{"code": "km", "name": "Khmer", "auto": False}]
+    assert data["subtitles"] == [{"code": "km", "name": "Khmer", "auto": False, "translated": False}]
 
 
 def test_info_reports_errors(client, monkeypatch):
@@ -137,7 +144,36 @@ def test_info_reports_errors(client, monkeypatch):
     def boom(url):
         raise RuntimeError("Video unavailable")
     monkeypatch.setattr(webapp, "get_video_info", boom)
-    assert client.post("/info", data={"url": "bad"}).get_json() == {"error": "Video unavailable"}
+    assert client.post("/info", data={"url": "bad"}).get_json() == {"error": "This video is unavailable"}
+
+
+def test_info_hides_unknown_errors_behind_a_plain_message(client, monkeypatch):
+    """Checks an unrecognised yt-dlp error isn't shown raw on the page."""
+    def boom(url):
+        raise RuntimeError("ERROR: [generic] x: some internal extractor failure (caused by KeyError('a'))")
+    monkeypatch.setattr(webapp, "get_video_info", boom)
+    assert client.post("/info", data={"url": "x"}).get_json() == {"error": "Video not found or invalid URL"}
+
+
+@pytest.mark.parametrize("message, expected", [
+    ("ERROR: [youtube] abc: Private video. Sign in if you've been granted access", "This video is private"),
+    ("ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate", "This video is age-restricted"),
+    ("ERROR: Unsupported URL: https://example.com/x", "This site isn't supported"),
+    ("ERROR: [youtube] abc: Video unavailable", "This video is unavailable"),
+    ("ERROR: [generic] x: Unable to download webpage: Failed to resolve 'x'", "Couldn't reach the site. Check the link or try again"),
+    ("ERROR: unable to download video data: HTTP Error 403: Forbidden", "The site refused the download. Try again in a moment"),
+    ("ERROR: [youtube] abc: Requested format is not available", "That quality isn't available for this video"),
+    ("No subtitles found for that language", "No subtitles found for that language"),
+])
+def test_friendly_error(message, expected):
+    """
+    Checks common yt-dlp errors become plain sentences, and others are kept (cleaned).
+
+    Parameters:
+    message (str): The raw error text.
+    expected (str): What the page should show.
+    """
+    assert webapp.friendly_error(Exception(message)) == expected
 
 
 def test_download_single_success(client, store, monkeypatch):
@@ -213,7 +249,7 @@ def test_download_failure_sets_error(client, store, monkeypatch):
     job_id = start(client).get_json()["job_id"]
     job = store.get(job_id)
     assert job.status == "error"
-    assert job.error == "Video unavailable"
+    assert job.error == "This video is unavailable"
 
 
 def read_events(response):
@@ -367,7 +403,8 @@ def start_batch(client, links):
     Returns:
     flask.Response: The /download response.
     """
-    return client.post("/download", data={"mode": "batch", "type": "video", "urls": "\n".join(links)})
+    return client.post("/download", data={"mode": "batch", "type": "video", "urls": "\n".join(links)},
+                       environ_base={"REMOTE_ADDR": REMOTE_VISITOR})
 
 
 def zip_contents(store, job):
@@ -408,7 +445,7 @@ def test_batch_partial_failure(client, store, monkeypatch):
     job = store.get(job_id)
     assert job.status == "done"
     assert sorted(zip_contents(store, job)) == ["01 - Video.mp4", "03 - Video.mp4"]
-    assert job.failed_items == [{"url": "https://b", "error": "Video unavailable"}]
+    assert job.failed_items == [{"url": "https://b", "error": "This video is unavailable"}]
 
 
 def test_batch_all_fail(client, store, monkeypatch):
@@ -653,15 +690,22 @@ def fake_startup(monkeypatch, store):
 
 def test_main_runs_without_debug_or_reloader(fake_startup):
     """Checks the server runs with no debugger and no auto-reloader, which spawned extra tunnels."""
-    webapp.main()
+    webapp.main([])
     assert fake_startup["run"]["debug"] is False
     assert fake_startup["run"]["use_reloader"] is False
     assert fake_startup["run"]["port"] == 5050
 
 
+def test_main_starts_no_tunnel_by_default(fake_startup):
+    """Checks the public link only opens when asked for."""
+    webapp.main([])
+    assert fake_startup["tunnels"] == []
+    assert fake_startup["run"]["port"] == 5050
+
+
 def test_main_starts_one_tunnel_and_stops_it(fake_startup):
-    """Checks exactly one tunnel starts and it is closed when the server stops."""
-    webapp.main()
+    """Checks --tunnel starts exactly one tunnel and it is closed when the server stops."""
+    webapp.main(["--tunnel"])
     assert len(fake_startup["tunnels"]) == 1
     assert fake_startup["tunnels"][0].args == ["cloudflared", "tunnel", "--url", "http://localhost:5050"]
     assert fake_startup["tunnels"][0].terminated
@@ -673,13 +717,13 @@ def test_main_stops_tunnel_on_ctrl_c(fake_startup, monkeypatch):
         raise KeyboardInterrupt
     monkeypatch.setattr(webapp.app, "run", interrupted)
     with pytest.raises(KeyboardInterrupt):
-        webapp.main()
+        webapp.main(["--tunnel"])
     assert fake_startup["tunnels"][0].terminated
 
 
 def test_sigterm_exits_cleanly(fake_startup):
     """Checks `kill` turns into a normal exit, so the tunnel cleanup runs."""
-    webapp.main()
+    webapp.main(["--tunnel"])
     handler = fake_startup["signals"][webapp.signal.SIGTERM]
     with pytest.raises(SystemExit):
         handler(webapp.signal.SIGTERM, None)
@@ -690,5 +734,68 @@ def test_main_without_cloudflared_still_serves(fake_startup, monkeypatch):
     def missing(args, **kwargs):
         raise FileNotFoundError("cloudflared")
     monkeypatch.setattr(webapp.subprocess, "Popen", missing)
-    webapp.main()
+    webapp.main(["--tunnel"])
     assert fake_startup["run"]["port"] == 5050
+
+
+# ---------- Browser downloads and the working folder ----------
+
+def start_local(client, **form):
+    """
+    Posts a single download from this Mac (localhost, not through the tunnel).
+
+    Parameters:
+    client (flask.testing.FlaskClient): The test client.
+    **form: Extra form fields.
+
+    Returns:
+    flask.Response: The /download response.
+    """
+    data = {"url": "https://x", "type": "video", **form}
+    return client.post("/download", data=data, environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+
+def test_local_download_is_fetched_by_the_browser(client, store, tmp_path, monkeypatch):
+    """Checks a download on this Mac waits in its job folder so the browser can save it (and show its popup)."""
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    job_id = start_local(client).get_json()["job_id"]
+    job = store.get(job_id)
+    assert job.saved_locally is False
+    assert "clip.mp4" in os.listdir(store.folder(job_id))
+    assert not (tmp_path / "Downloads").exists()
+    assert client.get(f"/files/{job_id}/clip.mp4").data == b"bytes-clip.mp4"
+
+
+def test_working_folder_is_outside_the_project():
+    """Checks downloads no longer pile up inside the project's app/downloads folder."""
+    app_dir = os.path.dirname(os.path.abspath(webapp.__file__))
+    assert not os.path.abspath(webapp.DOWNLOAD_DIR).startswith(app_dir + os.sep)
+
+
+def test_files_still_serves_jobs_saved_to_downloads_by_0_10_0(client, store, tmp_path):
+    """Checks history entries from 0.10.0 (files in ~/Downloads) still work, and nothing else there is reachable."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "clip.mp4").write_bytes(b"old-version")
+    (downloads / "private.pdf").write_bytes(b"secret")
+    job = store.create("single", "video", {})
+    store.update(job.id, status="done", saved_locally=True, files=["clip.mp4"])
+    assert client.get(f"/files/{job.id}/clip.mp4").data == b"old-version"
+    assert client.get(f"/files/{job.id}/private.pdf").status_code == 404
+
+
+# ---------- Version ----------
+
+def test_version_matches_changelog():
+    """Checks the version shown on the page is the newest CHANGELOG entry, so a bump can't forget it."""
+    import re
+    import version
+    changelog = os.path.join(os.path.dirname(os.path.abspath(webapp.__file__)), "..", "CHANGELOG.md")
+    newest = re.search(r"^## \[(\d+\.\d+\.\d+)\]", open(changelog, encoding="utf-8").read(), re.M).group(1)
+    assert version.__version__ == newest
+
+
+def test_footer_shows_version(client):
+    """Checks the page footer shows the app version."""
+    import version
+    assert f"v{version.__version__}".encode() in client.get("/").data

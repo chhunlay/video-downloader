@@ -1,5 +1,6 @@
 """Flask web front-end for downloader.py."""
 
+import argparse
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -27,11 +29,15 @@ from downloader import (
     validate_trim,
 )
 from jobs import FINAL_STATUSES, JobStore
+from version import __version__
 
 app = Flask(__name__)
 
-# Absolute, so it doesn't depend on the folder the server was started from
-DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+# Working folder for downloads until the browser saves them (kept 24 h). Outside
+# the project so nothing piles up in it: the user cache on macOS, else temp.
+_CACHE_ROOT = (os.path.expanduser("~/Library/Caches") if sys.platform == "darwin"
+               else tempfile.gettempdir())
+DOWNLOAD_DIR = os.path.join(_CACHE_ROOT, "Video Downloader")
 
 store = JobStore(DOWNLOAD_DIR)
 
@@ -49,6 +55,9 @@ JOB_SLOTS = threading.BoundedSemaphore(2)
 # New downloads are refused below this much free disk space
 MIN_FREE_BYTES = 2 * 1024 ** 3
 
+# 0.10.0 moved local downloads here; still read so those history entries keep working
+SAVE_DIR = os.path.expanduser("~/Downloads")
+
 # yt-dlp prefixes errors with "ERROR: " and often "[site] video-id: "
 _ERROR_PREFIX_RE = re.compile(r"^(ERROR:\s*)?(\[[^\]]+\]\s*[^:\s]+:\s*)?")
 
@@ -64,6 +73,54 @@ def clean_error(e):
     str: The message without yt-dlp's "ERROR: [site] id:" prefix.
     """
     return _ERROR_PREFIX_RE.sub("", str(e), count=1).strip() or "Download failed"
+
+
+# Common yt-dlp errors, as (text found in the lowercased error, plain message)
+_FRIENDLY_ERRORS = (
+    ("private video", "This video is private"),
+    ("confirm your age", "This video is age-restricted"),
+    ("unsupported url", "This site isn't supported"),
+    ("video unavailable", "This video is unavailable"),
+    ("this video is unavailable", "This video is unavailable"),
+    ("unable to download webpage", "Couldn't reach the site. Check the link or try again"),
+    ("failed to resolve", "Couldn't reach the site. Check the link or try again"),
+    ("timed out", "Couldn't reach the site. Check the link or try again"),
+    ("http error 403", "The site refused the download. Try again in a moment"),
+    ("requested format is not available", "That quality isn't available for this video"),
+)
+
+
+def friendly_error(e, fallback=None):
+    """
+    Turns an exception into a plain sentence for the page.
+
+    Parameters:
+    e (Exception): The error.
+    fallback (str/None): Message for unrecognised errors; None keeps the cleaned error text.
+
+    Returns:
+    str: e.g. "This video is private".
+    """
+    message = str(e).lower()
+    for hint, text in _FRIENDLY_ERRORS:
+        if hint in message:
+            return text
+    return fallback or clean_error(e)
+
+
+def finish_job(job_id, paths, **fields):
+    """
+    Marks a job done with its finished files, ready for the browser to fetch.
+
+    Parameters:
+    job_id (str): The job.
+    paths (list): Paths of the finished files, main file first.
+    **fields: Extra job fields to set (e.g. title).
+    """
+    if store.get(job_id) is None:
+        return
+    store.update(job_id, status="done", percent=100,
+                 files=[os.path.basename(p) for p in paths], **fields)
 
 
 def parse_download_form(form):
@@ -204,14 +261,13 @@ def run_single(job_id, url):
             trim=tuple(trim) if trim else None,
             subtitles=options.get("subtitles"),
         )
-        files = [os.path.basename(path)]
+        paths = [path]
         subtitles = options.get("subtitles")
         if subtitles and os.path.exists(subtitle_path_for(path, subtitles["lang"])):
-            files.append(os.path.basename(subtitle_path_for(path, subtitles["lang"])))
-        store.update(job_id, status="done", percent=100, files=files,
-                     title=os.path.splitext(files[0])[0])
+            paths.append(subtitle_path_for(path, subtitles["lang"]))
+        finish_job(job_id, paths, title=os.path.splitext(os.path.basename(path))[0])
     except Exception as e:
-        store.update(job_id, status="error", error=clean_error(e))
+        store.update(job_id, status="error", error=friendly_error(e))
 
 
 def run_batch(job_id, urls):
@@ -253,7 +309,7 @@ def run_batch(job_id, urls):
             )
             downloaded.append((path, f"{index + 1:02d} - {os.path.basename(path)}"))
         except Exception as e:
-            failed.append({"url": url, "error": clean_error(e)})
+            failed.append({"url": url, "error": friendly_error(e)})
             store.update(job_id, failed_items=list(failed))
 
     if store.get(job_id) is None:
@@ -270,13 +326,13 @@ def run_batch(job_id, urls):
             for path, arcname in downloaded:
                 z.write(path, arcname)
     except Exception as e:
-        store.update(job_id, status="error", error=clean_error(e))
+        store.update(job_id, status="error", error=friendly_error(e))
         return
     finally:
         for index in range(len(urls)):
             shutil.rmtree(os.path.join(folder, f"{index + 1:02d}"), ignore_errors=True)
 
-    store.update(job_id, status="done", percent=100, files=[zip_name])
+    finish_job(job_id, [os.path.join(folder, zip_name)])
 
 
 def run_job(worker, job_id, target):
@@ -303,9 +359,9 @@ def index():
     Serves the main page.
 
     Returns:
-    str: The rendered index.html.
+    str: The rendered index.html, with the app version in the footer.
     """
-    return render_template("index.html")
+    return render_template("index.html", version=__version__)
 
 
 @app.route("/download", methods=["POST"])
@@ -366,6 +422,9 @@ def job_file(job_id, name):
     """
     Sends one of a job's files as a download.
 
+    Jobs from 0.10.0 that were moved to ~/Downloads are served from there, but
+    only the files they created; nothing else in Downloads is reachable.
+
     Parameters:
     job_id (str): The job id.
     name (str): File name inside the job folder.
@@ -373,8 +432,13 @@ def job_file(job_id, name):
     Returns:
     Response: The file, or 404 for unknown jobs or files.
     """
-    if store.get(job_id) is None or name == "job.json":
+    job = store.get(job_id)
+    if job is None or name == "job.json":
         abort(404)
+    if job.saved_locally:
+        if name not in job.files:
+            abort(404)
+        return send_from_directory(SAVE_DIR, name, as_attachment=True)
     return send_from_directory(store.folder(job_id), name, as_attachment=True)
 
 
@@ -434,12 +498,15 @@ def video_info():
             "thumbnail": info.get("thumbnail"),
             "uploader": info.get("uploader"),
             "duration": info.get("duration"),
+            # Lets the page show the thumbnail at the video's real shape
+            "width": info.get("width"),
+            "height": info.get("height"),
             "resolutions": get_resolutions_with_sizes(info),
             "subtitles": get_subtitle_languages(info),
         })
 
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({"error": friendly_error(e, fallback="Video not found or invalid URL")})
 
 
 # Port 5050 because macOS AirPlay takes 5000
@@ -478,21 +545,29 @@ def stop_tunnel(tunnel):
         tunnel.kill()
 
 
-def main():
+def main(argv=None):
     """
-    Runs the web app with one public tunnel, closing the tunnel when the app stops.
+    Runs the web app; with --tunnel, also one public tunnel that closes when the app stops.
 
     Debug mode stays off: its auto-reloader re-ran this function on every code
     change, leaving a new cloudflared behind each time, and its debugger must
     never be reachable through the public link.
+
+    Parameters:
+    argv (list/None): Command-line arguments; defaults to sys.argv[1:].
     """
+    parser = argparse.ArgumentParser(description="Video Downloader web app")
+    parser.add_argument("--tunnel", action="store_true",
+                        help="also open a public *.trycloudflare.com link (needs cloudflared)")
+    args = parser.parse_args(argv)
+
     store.load()
     store.start_cleanup_thread()
 
     # `kill` (SIGTERM) normally skips finally blocks; turn it into a normal exit
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
 
-    tunnel = start_tunnel()
+    tunnel = start_tunnel() if args.tunnel else None
     try:
         # 0.0.0.0 allows other devices on the LAN
         app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)

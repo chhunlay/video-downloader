@@ -5,6 +5,88 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.11.0] - 2026-10-13
+### Changed
+- Phone layout: the thumbnail keeps the video's real shape (16:9, or a
+  height-capped portrait for TikTok/Shorts) with a duration badge, and
+  the header is smaller, so the download buttons show without scrolling.
+- Video is the main button and Audio a secondary outlined one. A single
+  TikTok link downloads without the watermark from the Video button (a
+  note says so); the separate TikTok button now only appears in batch mode.
+- Batch mode is opened with "Paste several links or a playlist" under the
+  link field instead of a Single/Batch switch.
+- Errors are shown in plain words ("This video is private", "This site
+  isn't supported", ...) instead of raw yt-dlp messages.
+- Labels use one style; the trim End field shows the video's length.
+
+### Added
+- Paste and Clear buttons in the link field.
+- A summary on the Options row ("0:30–1:15 · Khmer .srt").
+- A Cancel button while downloading.
+
+### Fixed
+- Accessibility: footer and hint text now meet WCAG AA contrast, every
+  button is at least 44px tall, and the thumbnail has alt text.
+
+## [0.10.4] - 2026-10-13
+### Added
+- The app version is shown in the page footer. It comes from
+  `app/version.py`, and a test checks it matches the newest CHANGELOG
+  entry.
+
+## [0.10.3] - 2026-10-13
+### Fixed
+- YouTube downloads no longer fail straight away on "HTTP Error 403:
+  Forbidden". The request is retried, and if YouTube keeps refusing, the
+  download switches to YouTube's Android client (as it already did for
+  "sign in to confirm" errors).
+
+## [0.10.2] - 2026-10-13
+### Changed
+- The audio quality picker selects 320 kbps (the highest) by default
+  instead of 192 kbps.
+
+### Removed
+- The "Save File" button under a finished download. The browser's own
+  download popup does the job; History's Save button still re-downloads.
+
+## [0.10.1] - 2026-10-13
+### Fixed
+- The browser's download popup is back. 0.10.0 moved downloads made on
+  this computer into `~/Downloads` itself and skipped the browser
+  download; now every download goes through the browser again, which
+  saves it to `~/Downloads`.
+
+### Changed
+- The server's working copies moved out of the project, from
+  `app/downloads/` to `~/Library/Caches/Video Downloader/` on macOS (the
+  temp folder elsewhere); they are still deleted after 24 hours.
+
+## [0.10.0] - 2026-10-13
+### Added
+- Downloads made on this computer are saved straight into `~/Downloads`
+  and kept there; existing files are never overwritten (`Title (1).mp4`)
+  and the browser no longer saves a second copy. Downloads from other
+  devices still go through the browser and stay on the server for 24 h.
+- English and Khmer auto-translated subtitles are offered for every video
+  that has auto captions.
+
+### Changed
+- Subtitles are off unless switched on; the switch resets for each new
+  video and reveals the language and .srt / Burn in choices.
+- The public Cloudflare link only opens with `python app.py --tunnel`.
+- The Video button uses the play icon; TikTok uses a phone icon.
+
+### Fixed
+- Subtitle languages showed codes like "en" instead of "English" when
+  YouTube's first caption format had no name.
+
+## [0.9.2] - 2026-10-13
+### Changed
+- Audio quality is picked after clicking Audio, the same way Video opens
+  its resolution picker, instead of sitting in the Options panel. The
+  Options toggle is hidden in batch mode, where it would now be empty.
+
 ## [0.9.1] - 2026-10-13
 ### Fixed
 - The web app no longer leaves Cloudflare tunnels running. Flask's debug

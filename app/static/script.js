@@ -17,9 +17,9 @@ const SVG_ATTRS = 'xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="
 const ICON_PATHS = {
     check: '<path d="m5 12 5 5 9-10"/>',
     x: '<path d="M6 6l12 12M18 6 6 18"/>',
-    video: '<path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/>',
+    video: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 9 5 3-5 3z"/>',
     audio: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
-    tiktok: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 9 5 3-5 3z"/>',
+    tiktok: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
     batch: '<path d="M4 7h16M4 12h16M4 17h10"/>',
 };
 
@@ -59,9 +59,11 @@ $('themeToggle').addEventListener('click', () => {
 let mode = 'single';
 let previewOk = false;
 let previewTitle = '';
+let previewIsTikTok = false;
 let previewResolutions = [];  // [[height, sizeStr | null], ...], highest first
-let audioQuality = '192';
-let subMode = 'off';
+let audioQuality = '320';  // the highest quality is picked unless changed
+let subtitlesEnabled = false;
+let subMode = 'srt';
 
 const BATCH_LIMIT = 50;
 // Batch videos differ, so these act as a maximum height
@@ -79,7 +81,7 @@ function showError(message) {
 }
 
 function hideResults() {
-    setHidden(['videoInfo', 'errorMessage', 'progressCard', 'saveAgain', 'failedItems'], true);
+    setHidden(['videoInfo', 'errorMessage', 'progressCard', 'failedItems'], true);
     previewOk = false;
     updateActions();
 }
@@ -90,24 +92,41 @@ function updateActions() {
     $('actions').classList.toggle('hidden', !ready);
 }
 
-// The resolution picker replaces the Video/Audio/TikTok buttons while open
-function setPickerOpen(open) {
-    $('resolutionPicker').classList.toggle('hidden', !open);
-    setHidden(['videoBtn', 'audioBtn', 'tiktokBtn'], open);
+const isTikTok = url => /tiktok\.com/i.test(url);
+
+// Buttons fit the link: a single TikTok link downloads without the watermark
+// from the Video button (a note says so); the separate TikTok button is only for batches
+function showDownloadButtons() {
+    $('tiktokNote').classList.toggle('hidden', !(mode === 'single' && previewIsTikTok));
+    setHidden(['videoBtn', 'audioBtn'], false);
+    $('tiktokBtn').classList.toggle('hidden', mode !== 'batch');
+}
+
+// A picker (resolution or audio quality) replaces the Video/Audio/TikTok buttons while open
+const PICKERS = ['resolutionPicker', 'audioPicker'];
+
+function openPicker(id) {
+    PICKERS.forEach(p => $(p).classList.toggle('hidden', p !== id));
+    setHidden(['videoBtn', 'audioBtn', 'tiktokBtn', 'tiktokNote'], true);
+}
+
+function closePickers() {
+    setHidden(PICKERS, true);
+    showDownloadButtons();
 }
 
 function setMode(newMode) {
     mode = newMode;
-    $('modeSingle').classList.toggle('active', mode === 'single');
-    $('modeBatch').classList.toggle('active', mode === 'batch');
     $('singleInput').classList.toggle('hidden', mode === 'batch');
     $('batchInput').classList.toggle('hidden', mode === 'single');
-    // Trim and subtitles only make sense for one known video
-    $('trimOptions').classList.toggle('hidden', mode === 'batch');
+    // Trim and subtitles only make sense for one known video, so batch has no options
+    $('optionsToggle').classList.toggle('hidden', mode === 'batch');
+    if (mode === 'batch') setOptionsOpen(false);
     $('subtitleOptions').classList.toggle('hidden', mode === 'batch' || $('subLang').options.length === 0);
-    setPickerOpen(false);
+    closePickers();
     hideResults();
     if (mode === 'single' && $('url').value) $('url').dispatchEvent(new Event('input'));
+    (mode === 'batch' ? $('urls') : $('url')).focus();
 }
 
 // Browsers restore old input on refresh/back, so start clean every time
@@ -115,15 +134,62 @@ function resetForm() {
     $('url').value = '';
     $('urls').value = '';
     updateLinkCount();
+    updateInputButtons();
     hideResults();
     setFetching(false);
 }
 
-// ---------- Options ----------
-function toggleOptions() {
-    const open = $('optionsPanel').classList.toggle('hidden') === false;
-    $('optionsChevron').classList.toggle('rotate-180', open);
+// ---------- Paste / clear ----------
+const canPaste = !!(navigator.clipboard && navigator.clipboard.readText);
+
+function updateInputButtons() {
+    const hasText = $('url').value.length > 0;
+    $('clearBtn').classList.toggle('hidden', !hasText);
+    $('pasteBtn').classList.toggle('hidden', hasText || !canPaste);
 }
+
+async function pasteLink() {
+    try {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (!text) return;
+        $('url').value = text;
+        $('url').dispatchEvent(new Event('input'));
+    } catch (e) {
+        $('url').focus();  // permission refused: let the user paste by hand
+    }
+}
+
+function clearLink() {
+    $('url').value = '';
+    $('url').dispatchEvent(new Event('input'));
+    $('url').focus();
+}
+
+// ---------- Options ----------
+function setOptionsOpen(open) {
+    $('optionsPanel').classList.toggle('hidden', !open);
+    $('optionsChevron').classList.toggle('rotate-180', open);
+    $('optionsToggle').setAttribute('aria-expanded', String(open));
+}
+
+function toggleOptions() {
+    setOptionsOpen($('optionsPanel').classList.contains('hidden'));
+}
+
+// One line telling what the closed Options panel will do, e.g. "0:30–1:15 · Khmer .srt"
+function updateOptionsSummary() {
+    const start = $('trimStart').value.trim();
+    const end = $('trimEnd').value.trim();
+    const trim = start || end ? `${start || '0:00'}–${end || 'end'}` : 'Full video';
+    let subs = 'No subtitles';
+    const lang = $('subLang').selectedOptions[0];
+    if (subtitlesEnabled && lang) {
+        subs = `${lang.textContent.replace(/ \(auto.*\)$/, '')} ${subMode === 'burn' ? 'burned in' : '.srt'}`;
+    }
+    $('optionsSummary').textContent = `${trim} · ${subs}`;
+}
+['trimStart', 'trimEnd'].forEach(id => $(id).addEventListener('input', updateOptionsSummary));
+$('subLang').addEventListener('change', updateOptionsSummary);
 
 function bindChips(containerId, onSelect) {
     $(containerId).addEventListener('click', e => {
@@ -133,15 +199,23 @@ function bindChips(containerId, onSelect) {
         onSelect(chip.dataset.value);
     });
 }
-bindChips('qualityChips', value => { audioQuality = value; });
-bindChips('subModeChips', value => { subMode = value; });
+bindChips('subModeChips', value => { subMode = value; updateOptionsSummary(); });
+
+function setSubtitlesEnabled(enabled) {
+    subtitlesEnabled = enabled;
+    $('subToggle').classList.toggle('on', enabled);
+    $('subToggle').setAttribute('aria-checked', String(enabled));
+    $('subDetails').classList.toggle('hidden', !enabled);
+    updateOptionsSummary();
+}
 
 function renderSubtitles(languages) {
+    setSubtitlesEnabled(false);  // every new video starts without subtitles
     const select = $('subLang');
     select.replaceChildren(...(languages || []).map(lang => {
         const option = document.createElement('option');
         option.value = lang.code;
-        option.textContent = lang.name + (lang.auto ? ' (auto)' : '');
+        option.textContent = lang.name + (lang.translated ? ' (auto-translated)' : lang.auto ? ' (auto)' : '');
         return option;
     }));
     $('subtitleOptions').classList.toggle('hidden', select.options.length === 0 || mode === 'batch');
@@ -188,9 +262,35 @@ function renderResolutions(resolutions, limitedNote) {
     $('resolutionLimitedNote').classList.toggle('hidden', !limitedNote || !(resolutions.length <= 1 || maxRes < 480));
 }
 
+function formatDuration(seconds) {
+    const s = Math.round(seconds);
+    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = String(s % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+// Landscape fills the width; portrait (TikTok, Shorts) is capped in height and centered
+const PORTRAIT_MAX_HEIGHT = 320;
+
+function showThumbnail(data) {
+    const w = data.width || 16, h = data.height || 9;
+    const wrap = $('thumbWrap');
+    wrap.style.aspectRatio = `${w} / ${h}`;
+    wrap.style.width = h > w ? `${Math.round(PORTRAIT_MAX_HEIGHT * w / h)}px` : '100%';
+    // No picture: leave the dark box instead of a broken-image icon
+    $('thumbnail').classList.toggle('hidden', !data.thumbnail);
+    $('thumbnail').src = data.thumbnail || '';
+    $('thumbnail').alt = data.title ? `Thumbnail: ${data.title}` : 'Video thumbnail';
+
+    const badge = $('durationBadge');
+    badge.classList.toggle('hidden', !data.duration);
+    if (data.duration) badge.textContent = formatDuration(data.duration);
+    $('trimEnd').placeholder = data.duration ? `End (max ${formatDuration(data.duration)})` : 'End (e.g. 1:30)';
+}
+
 $('url').addEventListener('input', () => {
     clearTimeout(debounceTimer);
     const url = $('url').value;
+    updateInputButtons();
 
     hideResults();
     if (!url) return;
@@ -204,19 +304,22 @@ $('url').addEventListener('input', () => {
             setFetching(false);
 
             if (data.error) {
-                showError('Video not found or invalid URL');
+                showError(data.error);
                 return;
             }
 
             $('videoInfo').classList.remove('hidden');
-            $('thumbnail').src = data.thumbnail;
+            showThumbnail(data);
             $('videoTitle').innerText = data.title;
-            $('videoUploader').innerText = "By " + data.uploader;
+            $('videoUploader').innerText = data.uploader ? "By " + data.uploader : '';
 
             previewOk = true;
             previewTitle = data.title || '';
+            previewIsTikTok = isTikTok(url);
+            $('trimStart').value = '';
+            $('trimEnd').value = '';
             previewResolutions = data.resolutions || [];
-            setPickerOpen(false);
+            closePickers();
             renderSubtitles(data.subtitles);
             updateActions();
         })
@@ -231,6 +334,10 @@ $('url').addEventListener('input', () => {
 // ---------- Resolution picker ----------
 // "Video" opens the picker, or downloads at best quality when there's nothing to pick
 function handleVideoClick() {
+    if (mode === 'single' && previewIsTikTok) {
+        startDownload('tiktok');
+        return;
+    }
     const resolutions = mode === 'batch' ? BATCH_RESOLUTIONS : previewResolutions;
     if (resolutions.length === 0) {
         $('resolutionSelect').value = '';
@@ -239,7 +346,7 @@ function handleVideoClick() {
     }
     $('resolutionLabel').textContent = mode === 'batch' ? 'Max resolution' : 'Resolution';
     renderResolutions(resolutions, mode === 'single');
-    setPickerOpen(true);
+    openPicker('resolutionPicker');
 }
 
 function selectResolution(value) {
@@ -249,8 +356,11 @@ function selectResolution(value) {
     });
 }
 
-function hideResolutionPicker() {
-    setPickerOpen(false);
+function selectAudioQuality(value) {
+    audioQuality = value;
+    document.querySelectorAll('#audioCards .res-card').forEach(card => {
+        card.classList.toggle('selected', card.dataset.value === value);
+    });
 }
 
 // ---------- Download ----------
@@ -265,6 +375,7 @@ const STATUS_LABELS = {
     interrupted: 'Interrupted',
 };
 let activeSource = null;
+let activeJobId = null;
 
 function saveJobFiles(job) {
     // Off-DOM links start the browser downloads; spaced out so browsers allow several
@@ -287,10 +398,13 @@ function showProgress(job) {
     $('statusIcon').className = 'shrink-0 ' + (finished ? 'text-emerald-400' : failed ? 'text-rose-400' : '');
 
     let text = STATUS_LABELS[job.status] || job.status;
+    if (finished && job.saved_locally) text = 'Saved to Downloads';
     if (failed && job.error) text += ': ' + job.error;
     if (finished && job.failed_items.length) text += ` · ${job.failed_items.length} skipped`;
     $('status').textContent = text;
     $('status').title = text;
+
+    $('cancelBtn').classList.toggle('hidden', finished || failed);
 
     const showCounter = job.kind === 'batch' && !finished && !failed;
     $('batchCounter').classList.toggle('hidden', !showCounter);
@@ -306,23 +420,38 @@ function showProgress(job) {
     }));
 }
 
+// Deleting a running job stops it on the server and frees its files
+async function cancelDownload() {
+    if (!activeJobId) return;
+    const jobId = activeJobId;
+    activeJobId = null;
+    if (activeSource) activeSource.close();
+    $('cancelBtn').classList.add('hidden');
+    $('statusIcon').innerHTML = icon('x');
+    $('statusIcon').className = 'shrink-0 text-muted';
+    $('status').textContent = 'Cancelled';
+    try { await fetch(`/jobs/${jobId}`, {method: 'DELETE'}); } catch (e) {}
+    removeFromHistory(jobId);
+}
+
 function trackJob(jobId) {
     if (activeSource) activeSource.close();
     const evt = new EventSource(`/progress/${jobId}`);
     activeSource = evt;
+    activeJobId = jobId;
 
     evt.onmessage = e => {
         const job = JSON.parse(e.data);
         showProgress(job);
 
-        if (job.status === 'done') {
+        // Jobs from 0.10.0 already put their files in ~/Downloads, so only the rest are saved here
+        if (job.status === 'done' && !job.saved_locally) {
             evt.close();
             saveJobFiles(job);
-            $('saveAgain').onclick = () => saveJobFiles(job);
-            $('saveAgain').classList.remove('hidden');
         }
         if (job.status === 'done' || job.status === 'error' || job.status === 'interrupted') {
             evt.close();
+            activeJobId = null;
             refreshHistory();
         }
     };
@@ -343,15 +472,16 @@ async function startDownload(dtype) {
         fields.url = $('url').value;
         fields.trim_start = $('trimStart').value;
         fields.trim_end = $('trimEnd').value;
-        if (subMode !== 'off' && dtype !== 'audio' && $('subLang').value) {
+        if (subtitlesEnabled && dtype !== 'audio' && $('subLang').value) {
             fields.sub_lang = $('subLang').value;
             fields.sub_mode = subMode;
         }
     }
 
-    setHidden(['errorMessage', 'saveAgain'], true);
+    setHidden(['errorMessage'], true);
     $('progressCard').classList.remove('hidden');
     showProgress({status: 'queued', percent: 0, kind: mode, item_index: 0, item_count: 1, failed_items: []});
+    $('cancelBtn').classList.add('hidden');  // nothing to cancel until the server has a job
 
     let response, data;
     try {
@@ -368,7 +498,7 @@ async function startDownload(dtype) {
         return;
     }
 
-    setPickerOpen(false);
+    closePickers();
     addToHistory({
         id: data.job_id,
         title: mode === 'batch' ? '' : previewTitle,
@@ -454,6 +584,7 @@ function renderHistory() {
         const meta = document.createElement('p');
         meta.className = 'text-xs text-faint';
         let state = expired ? 'Expired' : job ? STATUS_LABELS[job.status] : '';
+        if (job && job.status === 'done' && job.saved_locally) state = 'Saved to Downloads';
         if (job && job.status === 'error' && job.error) state += ': ' + job.error;
         meta.textContent = [relativeTime(entry.created), state].filter(Boolean).join(' · ');
         meta.title = meta.textContent;
@@ -465,10 +596,12 @@ function renderHistory() {
         if (expired) {
             buttons.append(historyButton('Remove', '', () => removeFromHistory(entry.id)));
         } else {
-            if (job && job.status === 'done') {
+            const local = job && job.saved_locally;
+            if (job && job.status === 'done' && !local) {
                 buttons.append(historyButton('Save', 'primary', () => saveJobFiles(job)));
             }
-            buttons.append(historyButton('Delete', '', () => deleteJob(entry.id)));
+            // Removing a local download only forgets it; the file stays in ~/Downloads
+            buttons.append(historyButton(local ? 'Remove' : 'Delete', '', () => deleteJob(entry.id)));
         }
 
         li.append(iconBox, text, buttons);

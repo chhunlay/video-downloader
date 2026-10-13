@@ -377,9 +377,23 @@ def test_get_subtitle_languages():
         "automatic_captions": {"en": [{"name": "English"}], "fr": [{"name": "French"}]},
     }
     assert downloader.get_subtitle_languages(info) == [
-        {"code": "en", "name": "English", "auto": False},
-        {"code": "km", "name": "Khmer", "auto": False},
-        {"code": "en", "name": "English", "auto": True},
+        {"code": "en", "name": "English", "auto": False, "translated": False},
+        {"code": "km", "name": "Khmer", "auto": False, "translated": False},
+        {"code": "en", "name": "English", "auto": True, "translated": False},
+    ]
+
+
+def test_get_subtitle_languages_adds_english_and_khmer_translations():
+    """Checks English and Khmer auto-translations are offered after the original captions."""
+    info = {
+        "language": "km",
+        "automatic_captions": {
+            "fr": [{"name": "French"}], "en": [{"name": "English"}], "km": [{"name": "Khmer"}],
+        },
+    }
+    assert downloader.get_subtitle_languages(info) == [
+        {"code": "km", "name": "Khmer", "auto": True, "translated": False},
+        {"code": "en", "name": "English", "auto": True, "translated": True},
     ]
 
 
@@ -387,7 +401,7 @@ def test_get_subtitle_languages_orig_track_without_language():
     """Checks "-orig" auto tracks are offered when the video's language is unknown."""
     info = {"automatic_captions": {"km-orig": [{"name": "Khmer (Original)"}], "de": [{}]}}
     assert downloader.get_subtitle_languages(info) == [
-        {"code": "km-orig", "name": "Khmer (Original)", "auto": True},
+        {"code": "km-orig", "name": "Khmer (Original)", "auto": True, "translated": False},
     ]
 
 
@@ -642,3 +656,55 @@ def test_normalize_reports_failed_burn(tmp_path, monkeypatch):
     monkeypatch.setattr(downloader.subprocess, "Popen", FailingPopen)
     assert downloader.normalize_for_social(str(video), burn_subtitles=str(srt)) is False
     assert not (tmp_path / "burn_subs.ass").exists()
+
+
+def test_get_subtitle_languages_finds_name_in_any_format():
+    """Checks the language name is taken from whichever format has one (YouTube's first often has none)."""
+    info = {"language": "en", "automatic_captions": {
+        "en": [{"ext": "vtt"}, {"ext": "json3", "name": "English"}],
+        "km": [{"ext": "json3", "name": "Khmer"}],
+    }}
+    assert [t["name"] for t in downloader.get_subtitle_languages(info)] == ["English", "Khmer"]
+
+
+# ---------- YouTube 403 ----------
+
+YT_403 = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+
+
+def test_retry_recovers_from_youtube_403():
+    """Checks a one-off 403 from YouTube is retried instead of failing the download."""
+    ydl = FakeYDL([YT_403])
+    assert downloader.extract_info_with_retry(ydl, "u", True, delay=0) == {"title": "ok"}
+    assert ydl.calls == 2
+
+
+def test_repeated_403_falls_back_to_android_client(monkeypatch):
+    """Checks a 403 that keeps happening switches to YouTube's Android client, like sign-in errors do."""
+    monkeypatch.setattr(downloader.time, "sleep", lambda s: None)
+    used = []
+
+    class FakeYoutubeDL:
+        """Fails with 403 on the default client, works on the Android client."""
+
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download):
+            android = "extractor_args" in self.opts
+            used.append("android" if android else "default")
+            if not android:
+                raise yt_dlp.utils.DownloadError(YT_403)
+            return {"title": "ok"}
+
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    info, opts = downloader.extract_info_with_fallback({"quiet": True}, "https://youtu.be/x", True)
+    assert info == {"title": "ok"}
+    assert opts["extractor_args"] == {"youtube": {"player_client": ["android"]}}
+    assert used[-1] == "android" and used.count("default") >= 2
