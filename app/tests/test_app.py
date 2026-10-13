@@ -14,6 +14,9 @@ from jobs import JobStore
 # Captured before any fixture swaps threading.Thread for InlineThread
 RealThread = threading.Thread
 
+# A visitor on another device; downloads from this Mac go to ~/Downloads instead
+REMOTE_VISITOR = "203.0.113.9"
+
 
 class InlineThread:
     """Runs the target right away instead of on a real thread."""
@@ -54,6 +57,8 @@ def store(tmp_path, monkeypatch):
 
     # Tests that download replace this with a fake; the rest must never hit the network
     monkeypatch.setattr(webapp, "download_media", no_real_downloads)
+    # Never touch the real ~/Downloads
+    monkeypatch.setattr(webapp, "SAVE_DIR", str(tmp_path / "Downloads"))
     return job_store
 
 
@@ -108,7 +113,7 @@ def start(client, **form):
     flask.Response: The /download response.
     """
     data = {"url": "https://x", "type": "video", **form}
-    return client.post("/download", data=data)
+    return client.post("/download", data=data, environ_base={"REMOTE_ADDR": REMOTE_VISITOR})
 
 
 def test_index_page(client):
@@ -129,7 +134,7 @@ def test_info_returns_preview(client, monkeypatch):
     data = client.post("/info", data={"url": "https://x"}).get_json()
     assert data["title"] == "Clip"
     assert data["resolutions"] == [[720, "1.0MB"]]
-    assert data["subtitles"] == [{"code": "km", "name": "Khmer", "auto": False}]
+    assert data["subtitles"] == [{"code": "km", "name": "Khmer", "auto": False, "translated": False}]
 
 
 def test_info_reports_errors(client, monkeypatch):
@@ -367,7 +372,8 @@ def start_batch(client, links):
     Returns:
     flask.Response: The /download response.
     """
-    return client.post("/download", data={"mode": "batch", "type": "video", "urls": "\n".join(links)})
+    return client.post("/download", data={"mode": "batch", "type": "video", "urls": "\n".join(links)},
+                       environ_base={"REMOTE_ADDR": REMOTE_VISITOR})
 
 
 def zip_contents(store, job):
@@ -653,15 +659,22 @@ def fake_startup(monkeypatch, store):
 
 def test_main_runs_without_debug_or_reloader(fake_startup):
     """Checks the server runs with no debugger and no auto-reloader, which spawned extra tunnels."""
-    webapp.main()
+    webapp.main([])
     assert fake_startup["run"]["debug"] is False
     assert fake_startup["run"]["use_reloader"] is False
     assert fake_startup["run"]["port"] == 5050
 
 
+def test_main_starts_no_tunnel_by_default(fake_startup):
+    """Checks the public link only opens when asked for."""
+    webapp.main([])
+    assert fake_startup["tunnels"] == []
+    assert fake_startup["run"]["port"] == 5050
+
+
 def test_main_starts_one_tunnel_and_stops_it(fake_startup):
-    """Checks exactly one tunnel starts and it is closed when the server stops."""
-    webapp.main()
+    """Checks --tunnel starts exactly one tunnel and it is closed when the server stops."""
+    webapp.main(["--tunnel"])
     assert len(fake_startup["tunnels"]) == 1
     assert fake_startup["tunnels"][0].args == ["cloudflared", "tunnel", "--url", "http://localhost:5050"]
     assert fake_startup["tunnels"][0].terminated
@@ -673,13 +686,13 @@ def test_main_stops_tunnel_on_ctrl_c(fake_startup, monkeypatch):
         raise KeyboardInterrupt
     monkeypatch.setattr(webapp.app, "run", interrupted)
     with pytest.raises(KeyboardInterrupt):
-        webapp.main()
+        webapp.main(["--tunnel"])
     assert fake_startup["tunnels"][0].terminated
 
 
 def test_sigterm_exits_cleanly(fake_startup):
     """Checks `kill` turns into a normal exit, so the tunnel cleanup runs."""
-    webapp.main()
+    webapp.main(["--tunnel"])
     handler = fake_startup["signals"][webapp.signal.SIGTERM]
     with pytest.raises(SystemExit):
         handler(webapp.signal.SIGTERM, None)
@@ -690,5 +703,100 @@ def test_main_without_cloudflared_still_serves(fake_startup, monkeypatch):
     def missing(args, **kwargs):
         raise FileNotFoundError("cloudflared")
     monkeypatch.setattr(webapp.subprocess, "Popen", missing)
-    webapp.main()
+    webapp.main(["--tunnel"])
     assert fake_startup["run"]["port"] == 5050
+
+
+# ---------- Saving to ~/Downloads on this Mac ----------
+
+def start_local(client, **form):
+    """
+    Posts a single download from this Mac (localhost, not through the tunnel).
+
+    Parameters:
+    client (flask.testing.FlaskClient): The test client.
+    **form: Extra form fields.
+
+    Returns:
+    flask.Response: The /download response.
+    """
+    data = {"url": "https://x", "type": "video", **form}
+    return client.post("/download", data=data, environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+
+def test_local_download_goes_to_downloads(client, store, tmp_path, monkeypatch):
+    """Checks a download made on this Mac lands in ~/Downloads, not the job folder."""
+    monkeypatch.setattr(webapp, "download_media", fake_download(extra_files=("clip.km.srt",)))
+    job_id = start_local(client, sub_lang="km", sub_mode="srt").get_json()["job_id"]
+    job = store.get(job_id)
+    assert job.status == "done"
+    assert job.saved_locally is True
+    assert job.files == ["clip.mp4", "clip.km.srt"]
+    downloads = tmp_path / "Downloads"
+    assert sorted(os.listdir(downloads)) == ["clip.km.srt", "clip.mp4"]
+    assert os.listdir(store.folder(job_id)) == ["job.json"]
+
+
+def test_local_download_never_overwrites(client, store, tmp_path, monkeypatch):
+    """Checks an existing file in ~/Downloads is kept and the new one gets a number."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "clip.mp4").write_bytes(b"old")
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    job_id = start_local(client).get_json()["job_id"]
+    assert store.get(job_id).files == ["clip (1).mp4"]
+    assert (downloads / "clip.mp4").read_bytes() == b"old"
+    assert store.get(job_id).title == "clip"
+
+
+@pytest.mark.parametrize("environ, headers", [
+    ({"REMOTE_ADDR": "192.168.1.5"}, {}),                    # phone on the same Wi-Fi
+    ({"REMOTE_ADDR": "127.0.0.1"}, {"CF-Connecting-IP": "1.2.3.4"}),  # visitor via the tunnel
+])
+def test_other_devices_are_not_saved_to_this_mac(client, store, tmp_path, monkeypatch, environ, headers):
+    """
+    Checks downloads from other devices stay in the job folder for the browser to fetch.
+
+    Parameters:
+    client (flask.testing.FlaskClient): The test client.
+    store (JobStore): The temp store.
+    tmp_path (pathlib.Path): The temp folder.
+    monkeypatch (pytest.MonkeyPatch): pytest's patcher.
+    environ (dict): WSGI environ overrides.
+    headers (dict): Request headers.
+    """
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    response = client.post("/download", data={"url": "https://x", "type": "video"},
+                           environ_base=environ, headers=headers)
+    job = store.get(response.get_json()["job_id"])
+    assert job.saved_locally is False
+    assert "clip.mp4" in os.listdir(store.folder(job.id))
+    assert not (tmp_path / "Downloads").exists()
+
+
+def test_files_serves_only_the_jobs_own_downloads(client, store, tmp_path, monkeypatch):
+    """Checks a local job's file is served from ~/Downloads, but nothing else there is."""
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    job_id = start_local(client).get_json()["job_id"]
+    (tmp_path / "Downloads" / "private.pdf").write_bytes(b"secret")
+    assert client.get(f"/files/{job_id}/clip.mp4").data == b"bytes-clip.mp4"
+    assert client.get(f"/files/{job_id}/private.pdf").status_code == 404
+
+
+def test_removing_local_job_keeps_the_file(client, store, tmp_path, monkeypatch):
+    """Checks removing a download from history never deletes it from ~/Downloads."""
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    job_id = start_local(client).get_json()["job_id"]
+    assert client.delete(f"/jobs/{job_id}").status_code == 204
+    assert (tmp_path / "Downloads" / "clip.mp4").exists()
+
+
+def test_local_batch_zip_goes_to_downloads(client, store, tmp_path, monkeypatch):
+    """Checks a batch made on this Mac puts its zip in ~/Downloads."""
+    monkeypatch.setattr(webapp, "download_media", fake_batch_download())
+    response = client.post("/download", data={"mode": "batch", "type": "audio", "urls": "https://a https://b"},
+                           environ_base={"REMOTE_ADDR": "127.0.0.1"})
+    job = store.get(response.get_json()["job_id"])
+    assert job.saved_locally is True
+    assert os.listdir(tmp_path / "Downloads") == job.files
+    assert os.listdir(store.folder(job.id)) == ["job.json"]
