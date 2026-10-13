@@ -63,9 +63,10 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Open **http://localhost:5050**. Paste a link, pick a type (video/audio/
-TikTok) and resolution or audio quality, and download. Open **Options**
-for trim and subtitles, or switch to **Batch** for several links.
+Open **http://localhost:5050**. Paste a link (or tap **Paste**), pick
+Video or Audio and the quality, and download. Open **Options** for trim
+and subtitles, or tap **Paste several links or a playlist** for a batch.
+TikTok links download without the watermark from the Video button.
 Finished files are saved by your browser (to `~/Downloads` by default).
 The server's working copies live outside the project, in
 `~/Library/Caches/Video Downloader/` on macOS (the temp folder elsewhere),
