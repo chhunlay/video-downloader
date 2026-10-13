@@ -17,9 +17,9 @@ const SVG_ATTRS = 'xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="
 const ICON_PATHS = {
     check: '<path d="m5 12 5 5 9-10"/>',
     x: '<path d="M6 6l12 12M18 6 6 18"/>',
-    video: '<path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/>',
+    video: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 9 5 3-5 3z"/>',
     audio: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
-    tiktok: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 9 5 3-5 3z"/>',
+    tiktok: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
     batch: '<path d="M4 7h16M4 12h16M4 17h10"/>',
 };
 
@@ -61,7 +61,8 @@ let previewOk = false;
 let previewTitle = '';
 let previewResolutions = [];  // [[height, sizeStr | null], ...], highest first
 let audioQuality = '192';
-let subMode = 'off';
+let subtitlesEnabled = false;
+let subMode = 'srt';
 
 const BATCH_LIMIT = 50;
 // Batch videos differ, so these act as a maximum height
@@ -146,12 +147,20 @@ function bindChips(containerId, onSelect) {
 }
 bindChips('subModeChips', value => { subMode = value; });
 
+function setSubtitlesEnabled(enabled) {
+    subtitlesEnabled = enabled;
+    $('subToggle').classList.toggle('on', enabled);
+    $('subToggle').setAttribute('aria-checked', String(enabled));
+    $('subDetails').classList.toggle('hidden', !enabled);
+}
+
 function renderSubtitles(languages) {
+    setSubtitlesEnabled(false);  // every new video starts without subtitles
     const select = $('subLang');
     select.replaceChildren(...(languages || []).map(lang => {
         const option = document.createElement('option');
         option.value = lang.code;
-        option.textContent = lang.name + (lang.auto ? ' (auto)' : '');
+        option.textContent = lang.name + (lang.translated ? ' (auto-translated)' : lang.auto ? ' (auto)' : '');
         return option;
     }));
     $('subtitleOptions').classList.toggle('hidden', select.options.length === 0 || mode === 'batch');
@@ -300,6 +309,7 @@ function showProgress(job) {
     $('statusIcon').className = 'shrink-0 ' + (finished ? 'text-emerald-400' : failed ? 'text-rose-400' : '');
 
     let text = STATUS_LABELS[job.status] || job.status;
+    if (finished && job.saved_locally) text = 'Saved to Downloads';
     if (failed && job.error) text += ': ' + job.error;
     if (finished && job.failed_items.length) text += ` · ${job.failed_items.length} skipped`;
     $('status').textContent = text;
@@ -328,7 +338,8 @@ function trackJob(jobId) {
         const job = JSON.parse(e.data);
         showProgress(job);
 
-        if (job.status === 'done') {
+        // Files made on this Mac are already in ~/Downloads, so the browser doesn't save a copy
+        if (job.status === 'done' && !job.saved_locally) {
             evt.close();
             saveJobFiles(job);
             $('saveAgain').onclick = () => saveJobFiles(job);
@@ -356,7 +367,7 @@ async function startDownload(dtype) {
         fields.url = $('url').value;
         fields.trim_start = $('trimStart').value;
         fields.trim_end = $('trimEnd').value;
-        if (subMode !== 'off' && dtype !== 'audio' && $('subLang').value) {
+        if (subtitlesEnabled && dtype !== 'audio' && $('subLang').value) {
             fields.sub_lang = $('subLang').value;
             fields.sub_mode = subMode;
         }
@@ -467,6 +478,7 @@ function renderHistory() {
         const meta = document.createElement('p');
         meta.className = 'text-xs text-faint';
         let state = expired ? 'Expired' : job ? STATUS_LABELS[job.status] : '';
+        if (job && job.status === 'done' && job.saved_locally) state = 'Saved to Downloads';
         if (job && job.status === 'error' && job.error) state += ': ' + job.error;
         meta.textContent = [relativeTime(entry.created), state].filter(Boolean).join(' · ');
         meta.title = meta.textContent;
@@ -478,10 +490,12 @@ function renderHistory() {
         if (expired) {
             buttons.append(historyButton('Remove', '', () => removeFromHistory(entry.id)));
         } else {
-            if (job && job.status === 'done') {
+            const local = job && job.saved_locally;
+            if (job && job.status === 'done' && !local) {
                 buttons.append(historyButton('Save', 'primary', () => saveJobFiles(job)));
             }
-            buttons.append(historyButton('Delete', '', () => deleteJob(entry.id)));
+            // Removing a local download only forgets it; the file stays in ~/Downloads
+            buttons.append(historyButton(local ? 'Remove' : 'Delete', '', () => deleteJob(entry.id)));
         }
 
         li.append(iconBox, text, buttons);
