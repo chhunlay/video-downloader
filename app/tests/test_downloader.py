@@ -665,3 +665,46 @@ def test_get_subtitle_languages_finds_name_in_any_format():
         "km": [{"ext": "json3", "name": "Khmer"}],
     }}
     assert [t["name"] for t in downloader.get_subtitle_languages(info)] == ["English", "Khmer"]
+
+
+# ---------- YouTube 403 ----------
+
+YT_403 = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+
+
+def test_retry_recovers_from_youtube_403():
+    """Checks a one-off 403 from YouTube is retried instead of failing the download."""
+    ydl = FakeYDL([YT_403])
+    assert downloader.extract_info_with_retry(ydl, "u", True, delay=0) == {"title": "ok"}
+    assert ydl.calls == 2
+
+
+def test_repeated_403_falls_back_to_android_client(monkeypatch):
+    """Checks a 403 that keeps happening switches to YouTube's Android client, like sign-in errors do."""
+    monkeypatch.setattr(downloader.time, "sleep", lambda s: None)
+    used = []
+
+    class FakeYoutubeDL:
+        """Fails with 403 on the default client, works on the Android client."""
+
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download):
+            android = "extractor_args" in self.opts
+            used.append("android" if android else "default")
+            if not android:
+                raise yt_dlp.utils.DownloadError(YT_403)
+            return {"title": "ok"}
+
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    info, opts = downloader.extract_info_with_fallback({"quiet": True}, "https://youtu.be/x", True)
+    assert info == {"title": "ok"}
+    assert opts["extractor_args"] == {"youtube": {"player_client": ["android"]}}
+    assert used[-1] == "android" and used.count("default") >= 2
