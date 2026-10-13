@@ -5,6 +5,13 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.10.3] - 2026-10-13
+### Fixed
+- YouTube downloads no longer fail straight away on "HTTP Error 403:
+  Forbidden". The request is retried, and if YouTube keeps refusing, the
+  download switches to YouTube's Android client (as it already did for
+  "sign in to confirm" errors).
+
 ## [0.10.2] - 2026-10-13
 ### Changed
 - The audio quality picker selects 320 kbps (the highest) by default
