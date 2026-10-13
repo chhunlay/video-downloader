@@ -137,6 +137,7 @@ PyInstaller) - no Python install needed on the machine that runs it.
 app/
   app.py                 Flask web app
   jobs.py                Per-download jobs: one folder + job.json each, 24 h cleanup
+  version.py             App version shown in the page footer (matches CHANGELOG.md)
   telegram_bot.py        Telegram bot
   downloader.py          Shared yt-dlp/ffmpeg download + re-encode logic
   desktop_app.py         pywebview wrapper for the Windows build
