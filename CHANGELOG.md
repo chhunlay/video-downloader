@@ -5,6 +5,12 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.9.2] - 2026-10-13
+### Changed
+- Audio quality is picked after clicking Audio, the same way Video opens
+  its resolution picker, instead of sitting in the Options panel. The
+  Options toggle is hidden in batch mode, where it would now be empty.
+
 ## [0.9.1] - 2026-10-13
 ### Fixed
 - The web app no longer leaves Cloudflare tunnels running. Flask's debug
