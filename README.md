@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.9.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.0-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -29,16 +29,21 @@ Web app:
 
 - **Video, audio or TikTok without watermark**, with a resolution picker
   showing each option's size.
-- **Audio quality** - MP3 at 128, 192 or 320 kbps, or M4A, with cover art.
+- **Audio quality** - picked after clicking Audio: MP3 at 128, 192 or
+  320 kbps, or M4A, with cover art.
 - **Trim** - type a start and/or end time (`90`, `1:30`, `1:02:03`) and
   only that part is downloaded.
-- **Subtitles** - pick a language the video offers, then save it as an
+- **Subtitles** - off unless you switch them on. Pick a language the video
+  offers (plus English and Khmer auto-translations), then save it as an
   `.srt` next to the video or burn it into the picture (Khmer included).
 - **Batch / playlist** - paste up to 50 links, or a playlist link, and
   get them back as one `.zip`. Links that fail are skipped and listed.
-- **Recent downloads** - each browser keeps its own history, so you can
-  save a file again or delete it. Files are kept on the server for
-  24 hours, then removed automatically.
+- **Saved to Downloads** - downloads made on this computer go straight into
+  `~/Downloads` and stay there; an existing file is never overwritten
+  (`Title (1).mp4`).
+- **Recent downloads** - each browser keeps its own history. Downloads
+  from other devices (phone on the same Wi-Fi, public link) are fetched by
+  their browser and kept on the server for 24 hours.
 
 ## Requirements
 
@@ -63,13 +68,20 @@ python app.py
 ```
 
 Open **http://localhost:5050**. Paste a link, pick a type (video/audio/
-TikTok) and resolution, and download. Open **Options** for trim, audio
-quality and subtitles, or switch to **Batch** for several links.
-Downloads are stored in `app/downloads/<job id>/` for 24 hours.
+TikTok) and resolution or audio quality, and download. Open **Options**
+for trim and subtitles, or switch to **Batch** for several links.
+Downloads made on this computer are saved to `~/Downloads`; downloads
+from other devices wait in `app/downloads/<job id>/` for 24 hours.
 
-If [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
-is installed (`brew install cloudflared`), the app also opens one public
-`*.trycloudflare.com` link, printed at startup, and closes it when the app
+To also get a public link, install
+[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+(`brew install cloudflared`) and start with:
+
+```
+python app.py --tunnel
+```
+
+It prints one `*.trycloudflare.com` address and closes it when the app
 stops. The server doesn't auto-reload: restart it after changing the code.
 
 ## Running the Telegram bot

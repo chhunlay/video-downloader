@@ -1,5 +1,6 @@
 """Flask web front-end for downloader.py."""
 
+import argparse
 import json
 import os
 import re
@@ -49,6 +50,9 @@ JOB_SLOTS = threading.BoundedSemaphore(2)
 # New downloads are refused below this much free disk space
 MIN_FREE_BYTES = 2 * 1024 ** 3
 
+# Downloads made on this Mac are moved here and kept; other devices fetch theirs through the browser
+SAVE_DIR = os.path.expanduser("~/Downloads")
+
 # yt-dlp prefixes errors with "ERROR: " and often "[site] video-id: "
 _ERROR_PREFIX_RE = re.compile(r"^(ERROR:\s*)?(\[[^\]]+\]\s*[^:\s]+:\s*)?")
 
@@ -64,6 +68,80 @@ def clean_error(e):
     str: The message without yt-dlp's "ERROR: [site] id:" prefix.
     """
     return _ERROR_PREFIX_RE.sub("", str(e), count=1).strip() or "Download failed"
+
+
+def is_local_request(req):
+    """
+    Checks whether a request comes from a browser on this Mac.
+
+    The Cloudflare tunnel also connects from localhost, so its visitors are
+    told apart by the CF-Connecting-IP header it adds.
+
+    Parameters:
+    req (flask.Request): The request.
+
+    Returns:
+    bool: True for this Mac's own browser.
+    """
+    return req.remote_addr in ("127.0.0.1", "::1") and "CF-Connecting-IP" not in req.headers
+
+
+def unique_path(folder, name):
+    """
+    Finds a free file name in a folder, adding " (1)", " (2)", ... when taken.
+
+    Parameters:
+    folder (str): The folder.
+    name (str): The wanted file name.
+
+    Returns:
+    str: A path in folder that doesn't exist yet.
+    """
+    stem, ext = os.path.splitext(name)
+    path, n = os.path.join(folder, name), 1
+    while os.path.exists(path):
+        path = os.path.join(folder, f"{stem} ({n}){ext}")
+        n += 1
+    return path
+
+
+def move_to_downloads(paths):
+    """
+    Moves finished files into SAVE_DIR without overwriting anything there.
+
+    Parameters:
+    paths (list): Paths of the finished files.
+
+    Returns:
+    list: The file names they got in SAVE_DIR, in the same order.
+    """
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    names = []
+    for path in paths:
+        destination = unique_path(SAVE_DIR, os.path.basename(path))
+        shutil.move(path, destination)
+        names.append(os.path.basename(destination))
+    return names
+
+
+def finish_job(job_id, paths, **fields):
+    """
+    Marks a job done, first moving its files to ~/Downloads if it was started on this Mac.
+
+    Parameters:
+    job_id (str): The job.
+    paths (list): Paths of the finished files, main file first.
+    **fields: Extra job fields to set (e.g. title).
+    """
+    job = store.get(job_id)
+    if job is None:
+        return
+    if job.options.get("save_locally"):
+        store.update(job_id, status="done", percent=100, saved_locally=True,
+                     files=move_to_downloads(paths), **fields)
+    else:
+        store.update(job_id, status="done", percent=100,
+                     files=[os.path.basename(p) for p in paths], **fields)
 
 
 def parse_download_form(form):
@@ -204,12 +282,11 @@ def run_single(job_id, url):
             trim=tuple(trim) if trim else None,
             subtitles=options.get("subtitles"),
         )
-        files = [os.path.basename(path)]
+        paths = [path]
         subtitles = options.get("subtitles")
         if subtitles and os.path.exists(subtitle_path_for(path, subtitles["lang"])):
-            files.append(os.path.basename(subtitle_path_for(path, subtitles["lang"])))
-        store.update(job_id, status="done", percent=100, files=files,
-                     title=os.path.splitext(files[0])[0])
+            paths.append(subtitle_path_for(path, subtitles["lang"]))
+        finish_job(job_id, paths, title=os.path.splitext(os.path.basename(path))[0])
     except Exception as e:
         store.update(job_id, status="error", error=clean_error(e))
 
@@ -276,7 +353,7 @@ def run_batch(job_id, urls):
         for index in range(len(urls)):
             shutil.rmtree(os.path.join(folder, f"{index + 1:02d}"), ignore_errors=True)
 
-    store.update(job_id, status="done", percent=100, files=[zip_name])
+    finish_job(job_id, [os.path.join(folder, zip_name)])
 
 
 def run_job(worker, job_id, target):
@@ -325,7 +402,8 @@ def download():
     if shutil.disk_usage(store.root_dir).free < MIN_FREE_BYTES:
         return jsonify({"error": "The server is low on disk space, try again later"}), 503
 
-    job = store.create(parsed["mode"], parsed["dtype"], parsed["options"])
+    options = {**parsed["options"], "save_locally": is_local_request(request)}
+    job = store.create(parsed["mode"], parsed["dtype"], options)
     if parsed["mode"] == "batch":
         worker, target = run_batch, parsed["urls"]
     else:
@@ -366,6 +444,9 @@ def job_file(job_id, name):
     """
     Sends one of a job's files as a download.
 
+    Files saved to ~/Downloads are served from there, but only the ones this
+    job created; nothing else in Downloads is reachable.
+
     Parameters:
     job_id (str): The job id.
     name (str): File name inside the job folder.
@@ -373,8 +454,13 @@ def job_file(job_id, name):
     Returns:
     Response: The file, or 404 for unknown jobs or files.
     """
-    if store.get(job_id) is None or name == "job.json":
+    job = store.get(job_id)
+    if job is None or name == "job.json":
         abort(404)
+    if job.saved_locally:
+        if name not in job.files:
+            abort(404)
+        return send_from_directory(SAVE_DIR, name, as_attachment=True)
     return send_from_directory(store.folder(job_id), name, as_attachment=True)
 
 
@@ -478,21 +564,29 @@ def stop_tunnel(tunnel):
         tunnel.kill()
 
 
-def main():
+def main(argv=None):
     """
-    Runs the web app with one public tunnel, closing the tunnel when the app stops.
+    Runs the web app; with --tunnel, also one public tunnel that closes when the app stops.
 
     Debug mode stays off: its auto-reloader re-ran this function on every code
     change, leaving a new cloudflared behind each time, and its debugger must
     never be reachable through the public link.
+
+    Parameters:
+    argv (list/None): Command-line arguments; defaults to sys.argv[1:].
     """
+    parser = argparse.ArgumentParser(description="Video Downloader web app")
+    parser.add_argument("--tunnel", action="store_true",
+                        help="also open a public *.trycloudflare.com link (needs cloudflared)")
+    args = parser.parse_args(argv)
+
     store.load()
     store.start_cleanup_thread()
 
     # `kill` (SIGTERM) normally skips finally blocks; turn it into a normal exit
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
 
-    tunnel = start_tunnel()
+    tunnel = start_tunnel() if args.tunnel else None
     try:
         # 0.0.0.0 allows other devices on the LAN
         app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)

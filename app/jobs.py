@@ -48,6 +48,8 @@ class Job:
     item_count: int = 1
     failed_items: list = field(default_factory=list)
     created: float = field(default_factory=time.time)
+    # True when the files were moved to ~/Downloads instead of staying in the job folder
+    saved_locally: bool = False
 
     def public(self):
         """

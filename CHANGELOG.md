@@ -5,6 +5,31 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.10.0] - 2026-10-13
+### Added
+- Downloads made on this computer are saved straight into `~/Downloads`
+  and kept there; existing files are never overwritten (`Title (1).mp4`)
+  and the browser no longer saves a second copy. Downloads from other
+  devices still go through the browser and stay on the server for 24 h.
+- English and Khmer auto-translated subtitles are offered for every video
+  that has auto captions.
+
+### Changed
+- Subtitles are off unless switched on; the switch resets for each new
+  video and reveals the language and .srt / Burn in choices.
+- The public Cloudflare link only opens with `python app.py --tunnel`.
+- The Video button uses the play icon; TikTok uses a phone icon.
+
+### Fixed
+- Subtitle languages showed codes like "en" instead of "English" when
+  YouTube's first caption format had no name.
+
+## [0.9.2] - 2026-10-13
+### Changed
+- Audio quality is picked after clicking Audio, the same way Video opens
+  its resolution picker, instead of sitting in the Options panel. The
+  Options toggle is hidden in batch mode, where it would now be empty.
+
 ## [0.9.1] - 2026-10-13
 ### Fixed
 - The web app no longer leaves Cloudflare tunnels running. Flask's debug
