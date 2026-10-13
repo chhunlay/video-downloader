@@ -38,12 +38,8 @@ Web app:
   `.srt` next to the video or burn it into the picture (Khmer included).
 - **Batch / playlist** - paste up to 50 links, or a playlist link, and
   get them back as one `.zip`. Links that fail are skipped and listed.
-- **Saved to Downloads** - downloads made on this computer go straight into
-  `~/Downloads` and stay there; an existing file is never overwritten
-  (`Title (1).mp4`).
-- **Recent downloads** - each browser keeps its own history. Downloads
-  from other devices (phone on the same Wi-Fi, public link) are fetched by
-  their browser and kept on the server for 24 hours.
+- **Recent downloads** - each browser keeps its own history, so you can
+  save a file again or delete it. The server keeps its copy for 24 hours.
 
 ## Requirements
 
@@ -70,8 +66,10 @@ python app.py
 Open **http://localhost:5050**. Paste a link, pick a type (video/audio/
 TikTok) and resolution or audio quality, and download. Open **Options**
 for trim and subtitles, or switch to **Batch** for several links.
-Downloads made on this computer are saved to `~/Downloads`; downloads
-from other devices wait in `app/downloads/<job id>/` for 24 hours.
+Finished files are saved by your browser (to `~/Downloads` by default).
+The server's working copies live outside the project, in
+`~/Library/Caches/Video Downloader/` on macOS (the temp folder elsewhere),
+and are deleted after 24 hours.
 
 To also get a public link, install
 [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
