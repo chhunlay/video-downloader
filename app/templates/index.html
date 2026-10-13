@@ -107,17 +107,6 @@
                     </div>
                 </div>
 
-                <!-- Audio quality -->
-                <div>
-                    <label class="block mb-1.5 text-xs font-semibold text-muted">Audio quality</label>
-                    <div id="qualityChips" class="grid grid-cols-4 gap-2">
-                        <button type="button" class="chip" data-value="128">128</button>
-                        <button type="button" class="chip selected" data-value="192">192</button>
-                        <button type="button" class="chip" data-value="320">320</button>
-                        <button type="button" class="chip" data-value="m4a">M4A</button>
-                    </div>
-                </div>
-
                 <!-- Subtitles (single only, when the video has any) -->
                 <div id="subtitleOptions" class="hidden">
                     <label class="block mb-1.5 text-xs font-semibold text-muted">Subtitles <span class="font-normal text-faint">(video and TikTok)</span></label>
@@ -137,7 +126,7 @@
                     <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/></svg>
                     Video
                 </button>
-                <button id="audioBtn" onclick="startDownload('audio')"
+                <button id="audioBtn" onclick="openPicker('audioPicker')"
                         class="action-btn col-span-1 flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-emerald-500/20">
                     <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
                     Audio
@@ -154,12 +143,34 @@
                         Only low quality is available for this video right now (an active site restriction, not something this app controls).
                     </p>
                     <div class="grid grid-cols-3 gap-2 mt-2.5">
-                        <button onclick="hideResolutionPicker()"
+                        <button onclick="closePickers()"
                                 class="action-btn col-span-1 flex items-center justify-center gap-2 bg-white/10 hover:bg-white/15 text-muted font-semibold py-3 px-4 rounded-xl">
                             Cancel
                         </button>
                         <button onclick="startDownload('video')"
                                 class="action-btn col-span-2 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-indigo-500/20">
+                            <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/></svg>
+                            Download
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Audio Quality Picker: opens from "Audio", same pattern as the resolution picker -->
+                <div id="audioPicker" class="hidden col-span-2">
+                    <label class="block mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">Audio quality</label>
+                    <div id="audioCards" class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <button type="button" class="res-card" data-value="128" onclick="selectAudioQuality('128')"><span class="res-card-label">128 kbps</span><span class="res-card-size">smaller</span></button>
+                        <button type="button" class="res-card selected" data-value="192" onclick="selectAudioQuality('192')"><span class="res-card-label">192 kbps</span><span class="res-card-size">default</span></button>
+                        <button type="button" class="res-card" data-value="320" onclick="selectAudioQuality('320')"><span class="res-card-label">320 kbps</span><span class="res-card-size">best</span></button>
+                        <button type="button" class="res-card" data-value="m4a" onclick="selectAudioQuality('m4a')"><span class="res-card-label">M4A</span><span class="res-card-size">AAC</span></button>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 mt-2.5">
+                        <button onclick="closePickers()"
+                                class="action-btn col-span-1 flex items-center justify-center gap-2 bg-white/10 hover:bg-white/15 text-muted font-semibold py-3 px-4 rounded-xl">
+                            Cancel
+                        </button>
+                        <button onclick="startDownload('audio')"
+                                class="action-btn col-span-2 flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-emerald-500/20">
                             <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M5 20h14"/></svg>
                             Download
                         </button>
