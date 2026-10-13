@@ -5,6 +5,18 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.10.1] - 2026-10-13
+### Fixed
+- The browser's download popup is back. 0.10.0 moved downloads made on
+  this computer into `~/Downloads` itself and skipped the browser
+  download; now every download goes through the browser again, which
+  saves it to `~/Downloads`.
+
+### Changed
+- The server's working copies moved out of the project, from
+  `app/downloads/` to `~/Library/Caches/Video Downloader/` on macOS (the
+  temp folder elsewhere); they are still deleted after 24 hours.
+
 ## [0.10.0] - 2026-10-13
 ### Added
 - Downloads made on this computer are saved straight into `~/Downloads`
