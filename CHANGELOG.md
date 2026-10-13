@@ -5,6 +5,12 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.10.4] - 2026-10-13
+### Added
+- The app version is shown in the page footer. It comes from
+  `app/version.py`, and a test checks it matches the newest CHANGELOG
+  entry.
+
 ## [0.10.3] - 2026-10-13
 ### Fixed
 - YouTube downloads no longer fail straight away on "HTTP Error 403:
