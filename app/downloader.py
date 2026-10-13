@@ -9,17 +9,20 @@ import requests
 import yt_dlp
 from PIL import Image
 
-# TikTok's scraper protection sometimes fails a request that works seconds later
+# Errors that often go away when the same request is made again seconds later:
+# TikTok's scraper protection, and YouTube refusing a stream with a 403
 TRANSIENT_ERROR_HINTS = (
     "unable to extract universal data for rehydration",
     "unexpected response from webpage request",
     "please report this issue",
     "status code 100001",
+    "http error 403",
 )
 
-# YouTube asks for sign-in on its web client; the Android client still works,
-# but only at ~240p, so it is used as a fallback only
-YOUTUBE_SIGN_IN_HINT = "sign in to confirm"
+# YouTube errors its web client can hit (asking for sign-in, or a 403 that
+# survives retries); the Android client usually still works, but only at
+# ~240p, so it is used as a fallback only
+YOUTUBE_FALLBACK_HINTS = ("sign in to confirm", "http error 403")
 
 # Netscape-format cookies for Instagram/Facebook/age-gated YouTube
 # (export with a browser extension like "Get cookies.txt LOCALLY")
@@ -89,7 +92,7 @@ def extract_info_with_retry(ydl, url, download, attempts=5, delay=3):
 
 def extract_info_with_fallback(ydl_opts, url, download):
     """
-    Runs extract_info, retrying with YouTube's Android client if sign-in is required.
+    Runs extract_info, retrying with YouTube's Android client on sign-in or 403 errors.
 
     Parameters:
     ydl_opts (dict): yt-dlp options.
@@ -104,7 +107,8 @@ def extract_info_with_fallback(ydl_opts, url, download):
         try:
             return extract_info_with_retry(ydl, url, download), ydl_opts
         except yt_dlp.utils.DownloadError as e:
-            if YOUTUBE_SIGN_IN_HINT not in str(e).lower():
+            message = str(e).lower()
+            if not any(hint in message for hint in YOUTUBE_FALLBACK_HINTS):
                 raise
 
     fallback_opts = dict(ydl_opts)
