@@ -5,6 +5,31 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.12.0] - 2026-10-17
+### Added
+- A detail line under the progress bar while downloading:
+  "38 MB of 120 MB · 4.2 MB/s · 0:35 left". Parts that aren't known
+  are left out, and the bar slides while the size is still unknown.
+
+### Changed
+- One bar for the whole download. Video and audio are filled by their
+  sizes, so the bar no longer drops back to 0% when the audio starts;
+  downloading fills 0-90%, merging and re-encoding the rest.
+- Trimmed YouTube downloads are much faster (a 3:34 clip of a 6-hour
+  video: about 1:48 before, a few seconds now). YouTube slows ffmpeg's
+  single long request to playback speed, so ffmpeg now reads through a
+  local relay that fetches in 10 MB chunks, like yt-dlp does. If the
+  relay fails, the download is redone the old way.
+
+### Fixed
+- Trimmed downloads showed 0% the whole time; they now show progress.
+- Subtitle files, fetched before the video, no longer move the bar.
+
+## [0.11.1] - 2026-10-17
+### Removed
+- The Paste button in the link field. Links are pasted the usual way
+  (long-press or Cmd/Ctrl+V); the Clear button stays.
+
 ## [0.11.0] - 2026-10-13
 ### Changed
 - Phone layout: the thumbnail keeps the video's real shape (16:9, or a

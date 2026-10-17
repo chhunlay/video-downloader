@@ -139,24 +139,10 @@ function resetForm() {
     setFetching(false);
 }
 
-// ---------- Paste / clear ----------
-const canPaste = !!(navigator.clipboard && navigator.clipboard.readText);
-
+// ---------- Clear ----------
 function updateInputButtons() {
     const hasText = $('url').value.length > 0;
     $('clearBtn').classList.toggle('hidden', !hasText);
-    $('pasteBtn').classList.toggle('hidden', hasText || !canPaste);
-}
-
-async function pasteLink() {
-    try {
-        const text = (await navigator.clipboard.readText()).trim();
-        if (!text) return;
-        $('url').value = text;
-        $('url').dispatchEvent(new Event('input'));
-    } catch (e) {
-        $('url').focus();  // permission refused: let the user paste by hand
-    }
 }
 
 function clearLink() {
@@ -389,11 +375,39 @@ function saveJobFiles(job) {
     }, i * 600));
 }
 
+// ---------- Progress details ----------
+function formatBytes(bytes) {
+    const units = ['KB', 'MB', 'GB'];
+    let value = bytes / 1024, unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit++;
+    }
+    return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+// "38 MB of 120 MB · 4.2 MB/s · 0:35 left"; unknown parts are left out
+function progressDetail(job) {
+    if (job.status !== 'downloading' || !job.downloaded_bytes) return '';
+    const parts = [job.total_bytes
+        ? `${formatBytes(job.downloaded_bytes)} of ${formatBytes(job.total_bytes)}`
+        : formatBytes(job.downloaded_bytes)];
+    if (job.speed) parts.push(`${formatBytes(job.speed)}/s`);
+    if (job.eta != null && job.speed) parts.push(`${formatDuration(job.eta)} left`);
+    return parts.join(' · ');
+}
+
 function showProgress(job) {
     const finished = job.status === 'done';
     const failed = job.status === 'error' || job.status === 'interrupted';
+    const sizeUnknown = job.status === 'downloading' && !job.percent && !job.total_bytes;
+    $('barTrack').classList.toggle('progress-indeterminate', sizeUnknown);
     $('bar').style.width = job.percent + '%';
-    $('percentLabel').innerText = job.percent + '%';
+    $('percentLabel').innerText = sizeUnknown ? '' : job.percent + '%';
+
+    const detail = progressDetail(job);
+    $('progressDetail').textContent = detail;
+    $('progressDetail').classList.toggle('hidden', !detail);
     $('statusIcon').innerHTML = finished ? icon('check') : failed ? icon('x') : '';
     $('statusIcon').className = 'shrink-0 ' + (finished ? 'text-emerald-400' : failed ? 'text-rose-400' : '');
 
@@ -430,6 +444,8 @@ async function cancelDownload() {
     $('statusIcon').innerHTML = icon('x');
     $('statusIcon').className = 'shrink-0 text-muted';
     $('status').textContent = 'Cancelled';
+    $('barTrack').classList.remove('progress-indeterminate');
+    $('progressDetail').classList.add('hidden');
     try { await fetch(`/jobs/${jobId}`, {method: 'DELETE'}); } catch (e) {}
     removeFromHistory(jobId);
 }

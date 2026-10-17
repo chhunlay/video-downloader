@@ -39,7 +39,7 @@
             <div class="relative mb-1">
                 <input id="url" type="text" placeholder="Paste a YouTube or TikTok link…"
                        autocomplete="off" autocorrect="off" spellcheck="false"
-                       class="url-input w-full py-3.5 pl-4 pr-24 rounded-xl outline-none transition-all">
+                       class="url-input w-full py-3.5 pl-4 pr-20 rounded-xl outline-none transition-all">
                 <div class="absolute right-1.5 inset-y-0 flex items-center gap-1">
                     <!-- Centered by the wrapper: a translate on the SVG would fight animate-spin -->
                     <svg id="loadingSpinner" class="animate-spin h-5 w-5 text-indigo-400 mr-2 pointer-events-none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -49,8 +49,6 @@
                     <button id="clearBtn" type="button" class="input-btn hidden" aria-label="Clear link" onclick="clearLink()">
                         <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
                     </button>
-                    <!-- Hidden where the browser can't read the clipboard (plain-http LAN address) -->
-                    <button id="pasteBtn" type="button" class="input-btn input-btn-text hidden" onclick="pasteLink()">Paste</button>
                 </div>
             </div>
             <p id="fetchingLabel" class="text-xs text-indigo-400 font-medium flex items-center gap-1.5">
@@ -212,9 +210,11 @@
                     <button id="cancelBtn" type="button" class="cancel-btn hidden" onclick="cancelDownload()">Cancel</button>
                 </div>
             </div>
-            <div class="progress-track w-full rounded-full h-2.5 overflow-hidden">
+            <div id="barTrack" class="progress-track w-full rounded-full h-2.5 overflow-hidden">
                 <div id="bar" class="progress-bar h-full rounded-full w-0"></div>
             </div>
+            <!-- "38 MB of 120 MB · 4.2 MB/s · 0:35 left" while downloading -->
+            <p id="progressDetail" class="hidden progress-detail mt-2 text-xs text-muted"></p>
             <ul id="failedItems" class="hidden mt-3 space-y-1 text-xs text-rose-400"></ul>
         </div>
 

@@ -4,10 +4,14 @@ import os
 import re
 import subprocess
 import time
+import urllib.parse
 
 import requests
 import yt_dlp
 from PIL import Image
+from yt_dlp.postprocessor import PostProcessor
+
+from trim_relay import TrimRelay
 
 # Errors that often go away when the same request is made again seconds later:
 # TikTok's scraper protection, and YouTube refusing a stream with a 403
@@ -90,7 +94,7 @@ def extract_info_with_retry(ydl, url, download, attempts=5, delay=3):
             time.sleep(delay)
 
 
-def extract_info_with_fallback(ydl_opts, url, download):
+def extract_info_with_fallback(ydl_opts, url, download, setup=None):
     """
     Runs extract_info, retrying with YouTube's Android client on sign-in or 403 errors.
 
@@ -98,12 +102,15 @@ def extract_info_with_fallback(ydl_opts, url, download):
     ydl_opts (dict): yt-dlp options.
     url (str): The video link.
     download (bool): True to download, False for metadata only.
+    setup (callable/None): Called with each YoutubeDL before it runs (e.g. to add post-processors).
 
     Returns:
     tuple: (info dict, the options actually used). Reuse those options for
     prepare_filename() so the filename matches.
     """
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        if setup:
+            setup(ydl)
         try:
             return extract_info_with_retry(ydl, url, download), ydl_opts
         except yt_dlp.utils.DownloadError as e:
@@ -114,6 +121,8 @@ def extract_info_with_fallback(ydl_opts, url, download):
     fallback_opts = dict(ydl_opts)
     fallback_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
     with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+        if setup:
+            setup(ydl)
         return extract_info_with_retry(ydl, url, download), fallback_opts
 
 
@@ -152,6 +161,23 @@ def get_video_info(url):
     opts = {'quiet': True, 'no_warnings': True, **_cookie_opts()}
     info, _ = extract_info_with_fallback(opts, url, download=False)
     return info
+
+
+def is_subtitle_progress(d):
+    """
+    Checks whether a progress update is for a subtitle file rather than the video's own streams.
+
+    yt-dlp fetches subtitles before the video, through the same progress hooks;
+    only real streams carry a format_id.
+
+    Parameters:
+    d (dict): yt-dlp progress dict.
+
+    Returns:
+    bool: True for a subtitle file download.
+    """
+    info = d.get('info_dict')
+    return bool(info) and 'format_id' not in info
 
 
 def download_percent(d):
@@ -466,6 +492,152 @@ def validate_trim(start, end, duration):
         if end is not None and end > duration:
             end = duration
     return (start, end)
+
+
+# ---------- Trim relay ----------
+
+# Extra bytes ffmpeg reads per stream for a clip: headers, and the jump back to a keyframe
+RELAY_OVERHEAD_BYTES = 512 * 1024
+
+def part_sizes(info):
+    """
+    Lists the size of each stream yt-dlp will download (video and audio come separately).
+
+    Parameters:
+    info (dict): The info dict about to be downloaded.
+
+    Returns:
+    list: Bytes per stream, None where unknown.
+    """
+    return [known_size(p) for p in info.get('requested_formats') or [info]]
+
+
+def clip_estimate(total, duration, start, end):
+    """
+    Estimates the bytes a trimmed download fetches: the clip's share of the whole file.
+
+    Parameters:
+    total (int/None): Whole file size in bytes.
+    duration (int/float/None): Whole video length in seconds.
+    start (int/float/None): Clip start in seconds.
+    end (int/float/None): Clip end in seconds; None for the end of the video.
+
+    Returns:
+    int/None: Estimated bytes, or None when the size or length is unknown.
+    """
+    if not total or not duration:
+        return None
+    start = start or 0
+    end = duration if end is None else min(end, duration)
+    return int(total * max(end - start, 0) / duration)
+
+
+def is_relayable(info):
+    """
+    Checks whether a download is a YouTube trim the relay can speed up.
+
+    The relay asks googlevideo for range=a-b pieces, so it needs YouTube's
+    https streams and their exact sizes.
+
+    Parameters:
+    info (dict): The info dict about to be downloaded.
+
+    Returns:
+    bool: True if every stream can go through the relay.
+    """
+    if 'section_start' not in info or info.get('extractor_key') != 'Youtube':
+        return False
+    parts = info.get('requested_formats') or [info]
+    return all(
+        p.get('protocol') == 'https'
+        and p.get('filesize')
+        and urllib.parse.urlparse(p.get('url') or '').netloc.endswith('googlevideo.com')
+        for p in parts
+    )
+
+
+class BeforeDownloadPP(PostProcessor):
+    """Runs just before yt-dlp downloads: reports the part sizes and routes YouTube trims through the relay."""
+
+    def __init__(self, progress_hook=None, relay=None, refresh=None):
+        """
+        Stores what the hook needs.
+
+        Parameters:
+        progress_hook (callable/None): Receives {"status": "plan", ...} and the relay's progress.
+        relay (TrimRelay/None): The relay for trimmed downloads; None to never relay.
+        refresh (callable/None): refresh(format_id) returns a fresh (url, headers) for a stream.
+        """
+        super().__init__()
+        self.progress_hook = progress_hook
+        self.relay = relay
+        self.refresh = refresh
+        self.relayed = False
+
+    def _report(self, data):
+        """
+        Passes an update to the progress hook, if there is one.
+
+        Parameters:
+        data (dict): The update.
+        """
+        if self.progress_hook:
+            self.progress_hook(data)
+
+    def _refresher(self, format_id):
+        """
+        Builds the relay's link refresher for one stream.
+
+        Parameters:
+        format_id (str): The stream's format id.
+
+        Returns:
+        callable/None: Returns a fresh (url, headers), or None without a refresh function.
+        """
+        if not self.refresh:
+            return None
+        return lambda: self.refresh(format_id)
+
+    def run(self, info):
+        """
+        Reports the plan and, for YouTube trims, swaps each stream link for a relay link.
+
+        Parameters:
+        info (dict): The info dict about to be downloaded.
+
+        Returns:
+        tuple: ([] files to delete, the info dict).
+        """
+        if not (self.relay and is_relayable(info)):
+            self._report({"status": "plan", "part_sizes": part_sizes(info)})
+            return [], info
+
+        # ffmpeg reads the clip from the relay instead of straight from YouTube
+        parts = info.get('requested_formats') or [info]
+        for part in parts:
+            part['url'] = self.relay.add(
+                part['url'], part.get('http_headers'), part['filesize'],
+                refresh=self._refresher(part.get('format_id')),
+            )
+        self.relayed = True
+
+        # ffmpeg reports nothing until it ends, so progress comes from the relay
+        estimate = clip_estimate(sum(part_sizes(info)), info.get('duration'),
+                                 info.get('section_start'), info.get('section_end'))
+        if estimate is not None:
+            estimate += RELAY_OVERHEAD_BYTES * len(parts)
+        self._report({"status": "plan", "part_sizes": [estimate]})
+
+        def on_progress(fetched, speed):
+            self._report({
+                "status": "downloading",
+                "downloaded_bytes": fetched,
+                "total_bytes_estimate": max(estimate or 0, fetched) or None,
+                "speed": speed,
+            })
+
+        self.relay.watch(on_progress)
+        return [], info
 
 
 # ---------- Subtitles ----------
@@ -1026,6 +1198,104 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
 
 # ---------- Download ----------
 
+def _before_download_setup(progress_hook, relay=None, refresh=None):
+    """
+    Builds a setup function that adds a BeforeDownloadPP to each YoutubeDL.
+
+    Parameters:
+    progress_hook (callable/None): The download's progress hook.
+    relay (TrimRelay/None): The relay for trimmed downloads.
+    refresh (callable/None): refresh(format_id) returns a fresh (url, headers).
+
+    Returns:
+    callable: setup(ydl) for extract_info_with_fallback.
+    """
+    def setup(ydl):
+        ydl.add_post_processor(BeforeDownloadPP(progress_hook, relay, refresh), when='before_dl')
+
+    return setup
+
+
+def _relay_setup(progress_hook, relay, refresh, pps):
+    """
+    Builds a setup function for trimmed downloads: adds the relay hook and stops its reports once downloaded.
+
+    Parameters:
+    progress_hook (callable/None): The download's progress hook.
+    relay (TrimRelay): The relay.
+    refresh (callable/None): refresh(format_id) returns a fresh (url, headers).
+    pps (list): Each BeforeDownloadPP made is added here.
+
+    Returns:
+    callable: setup(ydl) for extract_info_with_fallback.
+    """
+    def stop_on_finish(d):
+        # Converting comes next; late relay reports would look like downloading
+        if d.get('status') == 'finished' and not is_subtitle_progress(d):
+            relay.stop_watching()
+
+    def setup(ydl):
+        pps.append(BeforeDownloadPP(progress_hook, relay, refresh))
+        ydl.add_post_processor(pps[-1], when='before_dl')
+        ydl.add_progress_hook(stop_on_finish)
+
+    return setup
+
+
+def _download_trimmed(ydl_opts, url, progress_hook, out_dir):
+    """
+    Downloads a trim through the relay, falling back to ffmpeg reading YouTube directly.
+
+    Parameters:
+    ydl_opts (dict): yt-dlp options, download_ranges included.
+    url (str): The video link.
+    progress_hook (callable/None): The download's progress hook.
+    out_dir (str): The download folder; files a broken relay attempt left there are removed.
+
+    Returns:
+    tuple: (info dict, the options actually used).
+
+    Raises:
+    yt_dlp.utils.DownloadCancelled: If the job was cancelled meanwhile.
+    yt_dlp.utils.DownloadError: If the download fails both ways.
+    """
+    def refresh(format_id):
+        # A new extraction gives freshly signed links
+        fresh_opts = {k: v for k, v in ydl_opts.items() if k != 'progress_hooks'}
+        info, _ = extract_info_with_fallback(fresh_opts, url, download=False)
+        for f in info.get('formats') or []:
+            if f.get('format_id') == format_id:
+                return f['url'], f.get('http_headers') or {}
+        raise IOError(f"Format {format_id} is no longer offered")
+
+    before = set(os.listdir(out_dir))
+    with TrimRelay() as relay:
+        pps = []
+        setup = _relay_setup(progress_hook, relay, refresh, pps)
+        try:
+            result = extract_info_with_fallback(ydl_opts, url, download=True, setup=setup)
+            error = None
+        except yt_dlp.utils.DownloadError as e:
+            result, error = None, e
+
+        # A cancel stops the job; it must not start a second download
+        if relay.watch_error:
+            raise relay.watch_error
+        relayed = any(pp.relayed for pp in pps)
+        if error is None and not relay.failed:
+            return result
+        if not relayed:
+            raise error
+
+    # Relay broke: clear its leftovers (yt-dlp would skip an "already downloaded" file)
+    for name in set(os.listdir(out_dir)) - before:
+        _remove_if_exists(os.path.join(out_dir, name))
+
+    # Then redo it the slow way, ffmpeg reading YouTube itself
+    return extract_info_with_fallback(
+        ydl_opts, url, download=True, setup=_before_download_setup(progress_hook))
+
+
 def download_media(url, dtype, out_dir, progress_hook=None, resolution=None,
                    audio_quality="192", trim=None, subtitles=None):
     """
@@ -1089,7 +1359,11 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None,
 
     thumb_path = _fetch_cover_art(url, out_dir) if dtype == "audio" else None
 
-    info, effective_opts = extract_info_with_fallback(ydl_opts, url, download=True)
+    if trim:
+        info, effective_opts = _download_trimmed(ydl_opts, url, progress_hook, out_dir)
+    else:
+        info, effective_opts = extract_info_with_fallback(
+            ydl_opts, url, download=True, setup=_before_download_setup(progress_hook))
 
     # prepare_filename() applies the same truncation/sanitizing as the outtmpl
     with yt_dlp.YoutubeDL(effective_opts) as ydl:

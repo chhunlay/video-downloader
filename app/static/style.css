@@ -166,8 +166,28 @@ body {
     transition: width 0.3s ease;
 }
 
+/* Live download details under the bar; fixed-width digits so the line doesn't jitter */
+.progress-detail { font-variant-numeric: tabular-nums; }
 
-/* Paste / clear buttons inside the link field (44px tall for fingers) */
+/* Sliding bar while the download's size is still unknown */
+.progress-indeterminate .progress-bar {
+    width: 35% !important;
+    animation: indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes indeterminate {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(290%); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .progress-indeterminate .progress-bar {
+        width: 100% !important;
+        animation: none;
+        opacity: 0.4;
+    }
+}
+
+
+/* Clear button inside the link field (44px tall for fingers) */
 .input-btn {
     height: 2.75rem;
     min-width: 2.75rem;
@@ -179,12 +199,6 @@ body {
     transition: background 0.15s ease, color 0.15s ease;
 }
 .input-btn:hover { background: var(--track-bg); color: var(--text-main); }
-.input-btn-text {
-    padding: 0 0.75rem;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: #818cf8;
-}
 
 /* "Paste several links" / "Back to a single link" */
 .mode-link {
@@ -196,8 +210,7 @@ body {
     color: #818cf8;
 }
 .mode-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-html[data-theme="light"] .mode-link,
-html[data-theme="light"] .input-btn-text { color: #4f46e5; }
+html[data-theme="light"] .mode-link { color: #4f46e5; }
 
 /* Options toggle row */
 .options-row {
