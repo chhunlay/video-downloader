@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.12.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.13.0-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -43,6 +43,9 @@ Web app:
 - **Live progress** - one bar for the whole download (video and audio
   together, then merging and re-encoding), with the size, speed and time
   left underneath: `38 MB of 120 MB · 4.2 MB/s · 0:35 left`.
+- **Send from your phone** - open the page as `/?url=<link>` and the
+  preview loads by itself, so a Share shortcut on iPhone or Android (or a
+  browser bookmark) can send a video straight to it.
 - **Recent downloads** - each browser keeps its own history, so you can
   save a file again or delete it. The server keeps its copy for 24 hours.
 
@@ -87,6 +90,38 @@ python app.py --tunnel
 
 It prints one `*.trycloudflare.com` address and closes it when the app
 stops. The server doesn't auto-reload: restart it after changing the code.
+
+### Sending links from your phone or browser
+
+Open the page with a link in its address and the preview loads by itself:
+`http://<your-mac>.local:5050/?url=<link>`. `?text=` works too and picks
+the first link out of shared text like "Song title https://...". Find
+`<your-mac>` with `scutil --get LocalHostName`; the phone must be on the
+same Wi-Fi.
+
+**iPhone (Shortcuts app):** New shortcut, then:
+
+1. Tap the **(i)** button and turn on **Show in Share Sheet**; set it to
+   receive **URLs** and **Text**.
+2. Add **URL Encode** (input: *Shortcut Input*).
+3. Add **Text**: `http://<your-mac>.local:5050/?text=` followed by the
+   *URL Encoded Text* variable.
+4. Add **Open URLs** (input: that *Text*).
+
+Name it "Download video". In YouTube or TikTok, tap **Share → More →
+Download video**.
+
+**Android:** install **HTTP Shortcuts**, make a shortcut of type
+**Browser Shortcut** with the address above ending in `?text={share}`
+(turn on *Share text* under the trigger options), and pick it from
+**Share** in YouTube or TikTok.
+
+**Mac browser:** add a bookmark with this address, then click it on a
+video page:
+
+```
+javascript:location='http://localhost:5050/?url='+encodeURIComponent(location.href)
+```
 
 ## Running the Telegram bot
 
