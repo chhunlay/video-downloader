@@ -297,7 +297,9 @@ $('url').addEventListener('input', () => {
             $('videoInfo').classList.remove('hidden');
             showThumbnail(data);
             $('videoTitle').innerText = data.title;
-            $('videoUploader').innerText = data.uploader ? "By " + data.uploader : '';
+            // "Vimeo · By Someone"; either part can be missing
+            $('videoUploader').innerText = [data.site, data.uploader && "By " + data.uploader]
+                .filter(Boolean).join(' · ');
 
             previewOk = true;
             previewTitle = data.title || '';
