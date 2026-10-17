@@ -339,16 +339,136 @@ def test_delete_job(client, store, tmp_path):
     assert client.delete(f"/jobs/{job.id}").status_code == 404
 
 
+def job_state(store, job):
+    """
+    Reads a job's progress fields.
+
+    Parameters:
+    store (JobStore): The store.
+    job (Job): The job.
+
+    Returns:
+    tuple: (status, percent).
+    """
+    current = store.get(job.id)
+    return current.status, current.percent
+
+
 def test_job_hook_states(store):
-    """Checks yt-dlp and re-encode progress events map to job statuses."""
+    """Checks download, processing and re-encode map to one bar: 0-90% downloading, then up to 100%."""
     job = store.create("single", "video", {})
     hook = webapp.make_job_hook(job.id)
     hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 4})
-    assert (store.get(job.id).status, store.get(job.id).percent) == ("downloading", 25)
+    assert job_state(store, job) == ("downloading", 22)
     hook({"status": "finished"})
-    assert (store.get(job.id).status, store.get(job.id).percent) == ("processing", 100)
+    assert job_state(store, job) == ("processing", 90)
     hook({"status": "normalizing", "percent": 60})
-    assert (store.get(job.id).status, store.get(job.id).percent) == ("optimizing", 60)
+    assert job_state(store, job) == ("optimizing", 96)
+
+
+def test_job_hook_video_and_audio_never_go_back(store):
+    """Checks a video + audio download fills one bar by bytes instead of restarting for the audio."""
+    job = store.create("single", "video", {})
+    hook = webapp.make_job_hook(job.id)
+    hook({"status": "plan", "part_sizes": [300, 100]})
+
+    hook({"status": "downloading", "downloaded_bytes": 300, "total_bytes": 300})
+    assert job_state(store, job) == ("downloading", 67)
+    hook({"status": "finished", "downloaded_bytes": 300, "total_bytes": 300})
+    assert job_state(store, job) == ("downloading", 67)
+    hook({"status": "downloading", "downloaded_bytes": 50, "total_bytes": 100})
+    assert job_state(store, job) == ("downloading", 78)
+    hook({"status": "finished", "downloaded_bytes": 100, "total_bytes": 100})
+    assert job_state(store, job) == ("processing", 90)
+
+
+def test_job_hook_unknown_sizes_split_the_bar_evenly(store):
+    """Checks parts of unknown size each get an equal share of the bar."""
+    job = store.create("single", "video", {})
+    hook = webapp.make_job_hook(job.id)
+    hook({"status": "plan", "part_sizes": [None, 100]})
+    hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2})
+    assert job_state(store, job) == ("downloading", 22)
+    hook({"status": "finished"})
+    hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2})
+    assert job_state(store, job) == ("downloading", 67)
+
+
+def test_job_hook_percent_never_drops(store):
+    """Checks a shrinking estimate can't move the bar backwards."""
+    job = store.create("single", "video", {})
+    hook = webapp.make_job_hook(job.id)
+    hook({"status": "downloading", "downloaded_bytes": 50, "total_bytes_estimate": 100})
+    hook({"status": "downloading", "downloaded_bytes": 60, "total_bytes_estimate": 200})
+    assert job_state(store, job) == ("downloading", 45)
+
+
+def test_job_hook_reports_bytes_speed_and_time_left(store):
+    """Checks the job carries the whole download's bytes, the speed and the time left."""
+    job = store.create("single", "video", {})
+    hook = webapp.make_job_hook(job.id)
+    hook({"status": "plan", "part_sizes": [3000, 1000]})
+    hook({"status": "finished", "downloaded_bytes": 3000, "total_bytes": 3000})
+    hook({"status": "downloading", "downloaded_bytes": 500, "total_bytes": 1000, "speed": 100.0})
+    current = store.get(job.id)
+    assert (current.downloaded_bytes, current.total_bytes) == (3500, 4000)
+    assert (current.speed, current.eta) == (100, 5)
+
+
+def test_job_hook_unknown_total_leaves_size_and_time_out(store):
+    """Checks a download of unknown size still reports bytes and speed, but no total or time left."""
+    job = store.create("single", "video", {})
+    hook = webapp.make_job_hook(job.id)
+    hook({"status": "downloading", "downloaded_bytes": 1234, "speed": 50.0})
+    current = store.get(job.id)
+    assert (current.downloaded_bytes, current.total_bytes, current.speed, current.eta) == (1234, None, 50, None)
+    assert current.percent == 0
+
+
+def test_job_hook_ignores_downloading_after_the_last_part(store):
+    """Checks a late download report after every part finished can't pull the bar back."""
+    job = store.create("single", "audio", {})
+    hook = webapp.make_job_hook(job.id)
+    hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 4})
+    hook({"status": "finished"})
+    hook({"status": "downloading", "downloaded_bytes": 3, "total_bytes": 4})
+    assert job_state(store, job) == ("processing", 90)
+
+
+def test_job_hook_ignores_subtitle_downloads(store):
+    """Checks the subtitle file, fetched before the video, doesn't move the bar or end the download."""
+    job = store.create("single", "video", {})
+    hook = webapp.make_job_hook(job.id)
+    subtitle = {"ext": "vtt", "url": "https://x/sub.vtt"}
+    hook({"status": "downloading", "downloaded_bytes": 9, "total_bytes": 10, "info_dict": subtitle})
+    hook({"status": "finished", "info_dict": subtitle})
+    assert job_state(store, job) == ("queued", 0)
+    hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 4, "info_dict": {"format_id": "18"}})
+    assert job_state(store, job) == ("downloading", 22)
+
+
+def test_job_hook_clears_details_after_downloading(store):
+    """Checks bytes, speed and time left are cleared once the download moves on to processing."""
+    job = store.create("single", "video", {})
+    hook = webapp.make_job_hook(job.id)
+    hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 4, "speed": 9.0})
+    hook({"status": "finished"})
+    current = store.get(job.id)
+    assert (current.downloaded_bytes, current.total_bytes, current.speed, current.eta) == (None,) * 4
+
+
+def test_job_hook_saves_details_at_most_twice_a_second(store, monkeypatch):
+    """Checks byte-only changes are saved every 0.5 s, not on every yt-dlp update."""
+    job = store.create("single", "video", {})
+    now = [100.0]
+    monkeypatch.setattr(webapp.time, "monotonic", lambda: now[0])
+    hook = webapp.make_job_hook(job.id)
+    hook({"status": "downloading", "downloaded_bytes": 1000, "total_bytes": 10**9})
+    hook({"status": "downloading", "downloaded_bytes": 2000, "total_bytes": 10**9})
+    assert store.get(job.id).downloaded_bytes == 1000
+    now[0] += 0.5
+    hook({"status": "downloading", "downloaded_bytes": 3000, "total_bytes": 10**9})
+    assert store.get(job.id).downloaded_bytes == 3000
 
 
 @pytest.mark.parametrize("message, expected", [
@@ -496,7 +616,7 @@ def test_batch_progress_overall(client, store, monkeypatch):
     monkeypatch.setattr(webapp, "download_media",
                         fake_batch_download(progress={"https://b": halfway}))
     start_batch(client, ["https://a", "https://b", "https://c", "https://d"])
-    assert seen == {"percent": 37, "item_index": 1}
+    assert seen == {"percent": 36, "item_index": 1}
 
 
 # ---------- Review fixes ----------

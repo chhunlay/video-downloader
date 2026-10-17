@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.11.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.12.0-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -32,12 +32,17 @@ Web app:
 - **Audio quality** - picked after clicking Audio: MP3 at 128, 192 or
   320 kbps (320 is selected by default), or M4A, with cover art.
 - **Trim** - type a start and/or end time (`90`, `1:30`, `1:02:03`) and
-  only that part is downloaded.
+  only that part is downloaded. YouTube trims run at full speed: a small
+  local relay (`trim_relay.py`) fetches the part ffmpeg needs in chunks,
+  because YouTube slows ffmpeg's own single request to playback speed.
 - **Subtitles** - off unless you switch them on. Pick a language the video
   offers (plus English and Khmer auto-translations), then save it as an
   `.srt` next to the video or burn it into the picture (Khmer included).
 - **Batch / playlist** - paste up to 50 links, or a playlist link, and
   get them back as one `.zip`. Links that fail are skipped and listed.
+- **Live progress** - one bar for the whole download (video and audio
+  together, then merging and re-encoding), with the size, speed and time
+  left underneath: `38 MB of 120 MB · 4.2 MB/s · 0:35 left`.
 - **Recent downloads** - each browser keeps its own history, so you can
   save a file again or delete it. The server keeps its copy for 24 hours.
 
@@ -123,8 +128,10 @@ python -m pytest
 ```
 
 The tests cover the download helpers (formats, trim, subtitles, batch
-links), the job store, the web app routes and the bot's text helpers. yt-dlp, ffmpeg and the network are faked, so the whole
-suite runs offline in under a second.
+links), the trim relay, the job store and its progress, the web app
+routes and the bot's text helpers. yt-dlp, ffmpeg and YouTube are faked
+(the relay tests use a fake server on localhost), so the whole suite
+runs offline in a few seconds.
 
 ## Building a standalone Windows app
 
@@ -141,6 +148,7 @@ app/
   version.py             App version shown in the page footer (matches CHANGELOG.md)
   telegram_bot.py        Telegram bot
   downloader.py          Shared yt-dlp/ffmpeg download + re-encode logic
+  trim_relay.py          Local relay so trimmed YouTube downloads run at full speed
   desktop_app.py         pywebview wrapper for the Windows build
   templates/index.html   Web app UI
   static/                Web app script and styles
