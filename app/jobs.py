@@ -41,6 +41,11 @@ class Job:
     options: dict
     status: str = "queued"
     percent: int = 0
+    # Live download details; None when unknown or not downloading
+    downloaded_bytes: int = None
+    total_bytes: int = None
+    speed: int = None
+    eta: int = None
     title: str = None
     files: list = field(default_factory=list)
     error: str = None
