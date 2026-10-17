@@ -139,24 +139,10 @@ function resetForm() {
     setFetching(false);
 }
 
-// ---------- Paste / clear ----------
-const canPaste = !!(navigator.clipboard && navigator.clipboard.readText);
-
+// ---------- Clear ----------
 function updateInputButtons() {
     const hasText = $('url').value.length > 0;
     $('clearBtn').classList.toggle('hidden', !hasText);
-    $('pasteBtn').classList.toggle('hidden', hasText || !canPaste);
-}
-
-async function pasteLink() {
-    try {
-        const text = (await navigator.clipboard.readText()).trim();
-        if (!text) return;
-        $('url').value = text;
-        $('url').dispatchEvent(new Event('input'));
-    } catch (e) {
-        $('url').focus();  // permission refused: let the user paste by hand
-    }
 }
 
 function clearLink() {
