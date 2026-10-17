@@ -19,11 +19,11 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 from downloader import (
     AUDIO_QUALITIES,
     download_media,
-    download_percent,
     expand_batch,
     get_resolutions_with_sizes,
     get_subtitle_languages,
     get_video_info,
+    is_subtitle_progress,
     parse_timestamp,
     subtitle_path_for,
     validate_trim,
@@ -199,12 +199,22 @@ def parse_download_form(form):
     }
 
 
+# Share of the bar for downloading; merging and re-encoding fill the rest
+DOWNLOAD_SHARE = 90
+
+# Seconds between saves when only the bytes or speed changed
+DETAIL_SAVE_INTERVAL = 0.5
+
+
 def make_job_hook(job_id, item_index=0, item_count=1):
     """
     Builds a progress hook that reports yt-dlp and re-encode progress to a job.
 
-    For batches the item's percent is turned into the whole batch's percent.
-    The job is only saved when its status or whole percent changes.
+    One bar covers the whole job: downloading fills 0-90% by bytes across every
+    part (video and audio come separately), then merging and re-encoding fill
+    the rest, so the bar never jumps back. For batches the item's percent is
+    turned into the whole batch's percent. Byte-only changes are saved at most
+    every DETAIL_SAVE_INTERVAL seconds.
 
     Parameters:
     job_id (str): The job to update.
@@ -214,26 +224,77 @@ def make_job_hook(job_id, item_index=0, item_count=1):
     Returns:
     callable: A hook for download_media's progress_hook.
     """
-    last = {"status": None, "percent": None}
+    plan = {"sizes": [None], "part": 0, "done_bytes": 0}
+    last = {"status": None, "percent": 0, "saved_at": None}
+    no_details = {"downloaded_bytes": None, "total_bytes": None, "speed": None, "eta": None}
+
+    def download_progress(d):
+        # The current part's share of the bar, and the whole job's bytes
+        sizes, part = plan["sizes"], min(plan["part"], len(plan["sizes"]) - 1)
+        weights = sizes if all(sizes) else [1] * len(sizes)
+        part_total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        part_done = d.get("downloaded_bytes") or 0
+        fraction = min(part_done / part_total, 1) if part_total else 0
+        done_share = sum(weights[:part]) + fraction * weights[part]
+        percent = int(done_share / sum(weights) * DOWNLOAD_SHARE)
+
+        # Totals and time left only when every part's size is known
+        downloaded = plan["done_bytes"] + part_done
+        rest = sizes[part + 1:]
+        total = plan["done_bytes"] + part_total + sum(rest) if part_total and all(rest) else None
+        speed = d.get("speed")
+        eta = (total - downloaded) / speed if total and speed else None
+        details = {
+            "downloaded_bytes": downloaded,
+            "total_bytes": total,
+            "speed": int(speed) if speed else None,
+            "eta": max(int(round(eta)), 0) if eta is not None else None,
+        }
+        return percent, details
 
     def hook(d):
         # A deleted job stops its download at the next progress update
         if store.get(job_id) is None:
             raise yt_dlp.utils.DownloadCancelled("Job deleted")
+        if is_subtitle_progress(d):
+            return
+
+        # Map the event to a status, a 0-100 item percent and live details
+        details = no_details
+        if d["status"] == "plan":
+            plan.update(sizes=list(d["part_sizes"]) or [None], part=0, done_bytes=0)
+            return
         if d["status"] == "downloading":
-            status, percent = "downloading", download_percent(d)
-            if percent is None:
-                percent = last["percent"] or 0
+            # Every part is done; a late report must not pull the bar back
+            if plan["part"] >= len(plan["sizes"]):
+                return
+            status = "downloading"
+            percent, details = download_progress(d)
+            percent = max(percent, last["percent"]) if last["status"] == "downloading" else percent
         elif d["status"] == "finished":
-            status, percent = "processing", 100
+            # One part is done; the job is only processing after the last one
+            sizes = plan["sizes"]
+            plan["done_bytes"] += d.get("downloaded_bytes") or d.get("total_bytes") or (
+                sizes[min(plan["part"], len(sizes) - 1)] or 0)
+            plan["part"] += 1
+            if plan["part"] < len(sizes):
+                return
+            status, percent = "processing", DOWNLOAD_SHARE
         elif d["status"] == "normalizing":
-            status, percent = "optimizing", d.get("percent", last["percent"] or 0)
+            status = "optimizing"
+            percent = DOWNLOAD_SHARE + int(d.get("percent", 0) * (100 - DOWNLOAD_SHARE) / 100)
         else:
             return
-        percent = int((item_index + percent / 100) / item_count * 100)
-        if (status, percent) != (last["status"], last["percent"]):
-            last.update(status=status, percent=percent)
-            store.update(job_id, status=status, percent=percent)
+
+        # Save on a new status or percent, and byte-only changes twice a second
+        now = time.monotonic()
+        changed = (status, percent) != (last["status"], last["percent"])
+        due = last["saved_at"] is None or now - last["saved_at"] >= DETAIL_SAVE_INTERVAL
+        if not changed and not (details is not no_details and due):
+            return
+        last.update(status=status, percent=percent, saved_at=now)
+        overall = int((item_index + percent / 100) / item_count * 100)
+        store.update(job_id, status=status, percent=overall, **details)
 
     return hook
 
