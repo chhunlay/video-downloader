@@ -5,6 +5,13 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.13.0] - 2026-10-17
+### Added
+- Opening the page as `/?url=<link>` (or `?text=` with a link inside)
+  fills in the link and loads its preview, then clears it from the
+  address bar. The README shows how to set up a Share shortcut on
+  iPhone and Android, and a bookmark for desktop browsers.
+
 ## [0.12.1] - 2026-10-17
 ### Changed
 - The progress bar is solid indigo while downloading, then turns green
