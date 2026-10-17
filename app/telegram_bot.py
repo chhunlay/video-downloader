@@ -69,7 +69,7 @@ def pick_dtype(url: str) -> str:
     """
     Chooses the download type for a link.
 
-    Instagram/Facebook links only work with a real cookies.txt.
+    Login-only links (Vimeo, Reddit, private Instagram/Facebook posts) need a real cookies.txt.
 
     Parameters:
     url (str): The link.

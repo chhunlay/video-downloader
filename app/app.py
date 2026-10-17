@@ -25,6 +25,7 @@ from downloader import (
     get_video_info,
     is_subtitle_progress,
     parse_timestamp,
+    site_name,
     subtitle_path_for,
     validate_trim,
 )
@@ -75,10 +76,17 @@ def clean_error(e):
     return _ERROR_PREFIX_RE.sub("", str(e), count=1).strip() or "Download failed"
 
 
+# Sites like Vimeo and Reddit only serve logged-in users; cookies.txt fixes it
+LOGIN_NEEDED = "This site needs you to be logged in. Add your cookies (see README)"
+
 # Common yt-dlp errors, as (text found in the lowercased error, plain message)
 _FRIENDLY_ERRORS = (
     ("private video", "This video is private"),
     ("confirm your age", "This video is age-restricted"),
+    ("only works when logged-in", LOGIN_NEEDED),
+    ("authentication is required", LOGIN_NEEDED),
+    ("login required", LOGIN_NEEDED),
+    ("no video could be found", "This post has no video"),
     ("unsupported url", "This site isn't supported"),
     ("video unavailable", "This video is unavailable"),
     ("this video is unavailable", "This video is unavailable"),
@@ -554,10 +562,17 @@ def video_info():
     try:
         info = get_video_info(url)
 
+        # A list of videos can't be previewed as one; batch mode handles it
+        if info.get("_type") == "playlist" or "entries" in info:
+            count = len(list(info.get("entries") or []))
+            return jsonify({"error": f'This link is a playlist of {count} videos. '
+                                     f'Tap "Paste several links or a playlist" to download them'})
+
         return jsonify({
             "title": info.get("title"),
             "thumbnail": info.get("thumbnail"),
             "uploader": info.get("uploader"),
+            "site": site_name(info),
             "duration": info.get("duration"),
             # Lets the page show the thumbnail at the video's real shape
             "width": info.get("width"),

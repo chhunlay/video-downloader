@@ -5,6 +5,23 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.14.0] - 2026-10-17
+### Added
+- The preview names the site a link is from ("Vimeo · By ...").
+- A "Supported sites" table in the README, from real tests of 12 sites.
+
+### Changed
+- Sites that need an account (Vimeo, Reddit) now say "This site needs
+  you to be logged in" instead of "Video not found", and X posts
+  without a video say so.
+
+### Fixed
+- A link to a video inside a playlist or mix (`watch?v=...&list=...`)
+  downloads only that video, not the whole playlist.
+- A link that is only a playlist or collection (e.g. an Internet
+  Archive page with 10 videos) no longer downloads every video as if it
+  were one; the preview points to batch mode instead.
+
 ## [0.13.0] - 2026-10-17
 ### Added
 - Opening the page as `/?url=<link>` (or `?text=` with a link inside)
