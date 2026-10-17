@@ -210,9 +210,11 @@
                     <button id="cancelBtn" type="button" class="cancel-btn hidden" onclick="cancelDownload()">Cancel</button>
                 </div>
             </div>
-            <div class="progress-track w-full rounded-full h-2.5 overflow-hidden">
+            <div id="barTrack" class="progress-track w-full rounded-full h-2.5 overflow-hidden">
                 <div id="bar" class="progress-bar h-full rounded-full w-0"></div>
             </div>
+            <!-- "38 MB of 120 MB · 4.2 MB/s · 0:35 left" while downloading -->
+            <p id="progressDetail" class="hidden progress-detail mt-2 text-xs text-muted"></p>
             <ul id="failedItems" class="hidden mt-3 space-y-1 text-xs text-rose-400"></ul>
         </div>
 
