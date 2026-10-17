@@ -161,10 +161,13 @@ body {
     background: var(--track-bg);
     border: 1px solid var(--track-border);
 }
+/* Indigo while downloading, green when done, red when failed */
 .progress-bar {
-    background: linear-gradient(90deg, #6366f1, #ec4899);
-    transition: width 0.3s ease;
+    background: #6366f1;
+    transition: width 0.3s ease, background-color 0.3s ease;
 }
+.progress-done .progress-bar { background: #10b981; }
+.progress-failed .progress-bar { background: #f43f5e; }
 
 /* Live download details under the bar; fixed-width digits so the line doesn't jitter */
 .progress-detail { font-variant-numeric: tabular-nums; }
