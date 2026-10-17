@@ -5,6 +5,11 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.11.1] - 2026-10-17
+### Removed
+- The Paste button in the link field. Links are pasted the usual way
+  (long-press or Cmd/Ctrl+V); the Clear button stays.
+
 ## [0.11.0] - 2026-10-13
 ### Changed
 - Phone layout: the thumbnail keeps the video's real shape (16:9, or a
