@@ -644,7 +644,29 @@ async function refreshHistory() {
     renderHistory();
 }
 
+// ---------- Shared links ----------
+// First http(s) link in a ?url= or ?text= value (phones may share "Title https://...")
+function sharedLinkFrom(search) {
+    const params = new URLSearchParams(search);
+    const text = params.get('url') || params.get('text') || '';
+    const match = text.match(/https?:\/\/\S+/i);
+    return match ? match[0] : '';
+}
+
+// Opened as /?url=<link> (phone Share shortcut, bookmarklet): fill the link and load its preview
+function applySharedLink() {
+    const link = sharedLinkFrom(location.search);
+    if (!link) return;
+    history.replaceState(null, '', location.pathname);  // a refresh shouldn't load it again
+    if (mode !== 'single') setMode('single');
+    $('url').value = link;
+    $('url').dispatchEvent(new Event('input'));
+}
+
 // ---------- Start ----------
 resetForm();
-window.addEventListener('pageshow', resetForm);
+window.addEventListener('pageshow', () => {
+    resetForm();
+    applySharedLink();
+});
 refreshHistory();
