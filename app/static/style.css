@@ -166,6 +166,26 @@ body {
     transition: width 0.3s ease;
 }
 
+/* Live download details under the bar; fixed-width digits so the line doesn't jitter */
+.progress-detail { font-variant-numeric: tabular-nums; }
+
+/* Sliding bar while the download's size is still unknown */
+.progress-indeterminate .progress-bar {
+    width: 35% !important;
+    animation: indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes indeterminate {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(290%); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .progress-indeterminate .progress-bar {
+        width: 100% !important;
+        animation: none;
+        opacity: 0.4;
+    }
+}
+
 
 /* Clear button inside the link field (44px tall for fingers) */
 .input-btn {
