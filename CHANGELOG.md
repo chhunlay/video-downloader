@@ -5,6 +5,12 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.12.1] - 2026-10-17
+### Changed
+- The progress bar is solid indigo while downloading, then turns green
+  when done or red when it fails, instead of an indigo-to-pink
+  gradient. The percent takes the same color.
+
 ## [0.12.0] - 2026-10-17
 ### Added
 - A detail line under the progress bar while downloading:
