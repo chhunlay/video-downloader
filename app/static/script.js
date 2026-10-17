@@ -402,8 +402,12 @@ function showProgress(job) {
     const failed = job.status === 'error' || job.status === 'interrupted';
     const sizeUnknown = job.status === 'downloading' && !job.percent && !job.total_bytes;
     $('barTrack').classList.toggle('progress-indeterminate', sizeUnknown);
+    $('barTrack').classList.toggle('progress-done', finished);
+    $('barTrack').classList.toggle('progress-failed', failed);
     $('bar').style.width = job.percent + '%';
     $('percentLabel').innerText = sizeUnknown ? '' : job.percent + '%';
+    $('percentLabel').className = 'text-sm font-semibold '
+        + (finished ? 'text-emerald-400' : failed ? 'text-rose-400' : 'text-indigo-400');
 
     const detail = progressDetail(job);
     $('progressDetail').textContent = detail;
