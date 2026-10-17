@@ -1067,3 +1067,50 @@ def test_is_subtitle_progress(d, expected):
     expected (bool): True for a subtitle file.
     """
     assert downloader.is_subtitle_progress(d) is expected
+
+
+# ---------- Site names ----------
+
+@pytest.mark.parametrize("info, expected", [
+    ({"extractor_key": "Youtube"}, "YouTube"),
+    ({"extractor_key": "YoutubeTab"}, "YouTube"),
+    ({"extractor_key": "TikTok"}, "TikTok"),
+    ({"extractor_key": "Soundcloud"}, "SoundCloud"),
+    ({"extractor_key": "ArchiveOrg"}, "Internet Archive"),
+    ({"extractor_key": "Twitter"}, "X (Twitter)"),
+    ({"extractor_key": "Vimeo"}, "Vimeo"),
+    ({"extractor_key": "Generic", "webpage_url_domain": "news.example.com"}, "news.example.com"),
+    ({"extractor_key": "Generic", "webpage_url": "https://www.example.org/a"}, "example.org"),
+    ({}, None),
+])
+def test_site_name(info, expected):
+    """
+    Checks a link's site gets a readable name, falling back to its domain.
+
+    Parameters:
+    info (dict): yt-dlp info dict.
+    expected (str/None): The expected name.
+    """
+    assert downloader.site_name(info) == expected
+
+
+# ---------- Playlists in single mode ----------
+
+def test_get_video_info_reads_one_video_and_flat_playlists(monkeypatch):
+    """Checks a video link inside a playlist previews only that video, and playlists are read quickly."""
+    seen = {}
+
+    def fake_extract(opts, url, download, setup=None):
+        seen.update(opts)
+        return {"title": "x"}, opts
+
+    monkeypatch.setattr(downloader, "extract_info_with_fallback", fake_extract)
+    downloader.get_video_info("https://youtube.com/watch?v=a&list=b")
+    assert seen["noplaylist"] is True
+    assert seen["extract_flat"] == "in_playlist"
+
+
+def test_download_media_downloads_one_video_not_its_playlist(tmp_path, capture_ydl_opts):
+    """Checks a single download of a watch?v=...&list=... link gets just that video."""
+    downloader.download_media("https://youtube.com/watch?v=a&list=b", "video", str(tmp_path))
+    assert capture_ydl_opts["noplaylist"] is True

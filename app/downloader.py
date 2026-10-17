@@ -28,7 +28,8 @@ TRANSIENT_ERROR_HINTS = (
 # ~240p, so it is used as a fallback only
 YOUTUBE_FALLBACK_HINTS = ("sign in to confirm", "http error 403")
 
-# Netscape-format cookies for Instagram/Facebook/age-gated YouTube
+# Netscape-format cookies for login-only sites (Vimeo, Reddit, private
+# Instagram/Facebook posts) and age-gated YouTube
 # (export with a browser extension like "Get cookies.txt LOCALLY")
 COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
@@ -62,6 +63,48 @@ def is_tiktok(url):
     bool: True for tiktok.com links.
     """
     return "tiktok.com" in url.lower()
+
+
+# Readable names for yt-dlp extractors, matched on the start of extractor_key
+# (so YoutubeTab, TwitchClips, FacebookReel... are covered too)
+SITE_NAMES = (
+    ("youtube", "YouTube"),
+    ("tiktok", "TikTok"),
+    ("facebook", "Facebook"),
+    ("instagram", "Instagram"),
+    ("twitter", "X (Twitter)"),
+    ("reddit", "Reddit"),
+    ("vimeo", "Vimeo"),
+    ("dailymotion", "Dailymotion"),
+    ("bilibili", "Bilibili"),
+    ("twitch", "Twitch"),
+    ("soundcloud", "SoundCloud"),
+    ("bandcamp", "Bandcamp"),
+    ("archiveorg", "Internet Archive"),
+)
+
+
+def site_name(info):
+    """
+    Names the site a video comes from, for the preview card.
+
+    Parameters:
+    info (dict): yt-dlp info dict.
+
+    Returns:
+    str/None: A known site's name, else the page's domain (or yt-dlp's extractor name).
+    """
+    key = (info.get('extractor_key') or '').lower()
+    for prefix, name in SITE_NAMES:
+        if key.startswith(prefix):
+            return name
+
+    # Unknown or generic page: its domain reads better than yt-dlp's class name
+    domain = info.get('webpage_url_domain') or urllib.parse.urlparse(info.get('webpage_url') or '').netloc
+    domain = domain.removeprefix('www.')
+    if domain:
+        return domain
+    return info.get('extractor_key') if key and key != 'generic' else None
 
 
 # ---------- yt-dlp ----------
@@ -142,8 +185,8 @@ def _cookie_opts():
         return {}
     if "Netscape HTTP Cookie File" not in first_line and "HTTP Cookie File" not in first_line:
         print(f"[cookies] {COOKIE_FILE} doesn't look like a Netscape cookie "
-              "export - ignoring it. Instagram/Facebook links will fail "
-              "without real cookies.")
+              "export - ignoring it. Sites that need a login (Vimeo, Reddit, "
+              "private Instagram/Facebook posts) will fail without real cookies.")
         return {}
     return {"cookiefile": COOKIE_FILE}
 
@@ -158,7 +201,14 @@ def get_video_info(url):
     Returns:
     dict: yt-dlp's info dict (title, thumbnail, uploader, duration, formats, ...).
     """
-    opts = {'quiet': True, 'no_warnings': True, **_cookie_opts()}
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        # A video inside a playlist is just that video; a playlist is listed, not opened
+        'noplaylist': True,
+        'extract_flat': 'in_playlist',
+        **_cookie_opts(),
+    }
     info, _ = extract_info_with_fallback(opts, url, download=False)
     return info
 
@@ -1333,6 +1383,7 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None,
         'outtmpl': os.path.join(out_dir, '%(title).80s.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
+        'noplaylist': True,
         **_cookie_opts(),
         **_format_opts(dtype, resolution, audio_quality),
     }

@@ -139,6 +139,20 @@ def test_info_returns_preview(client, monkeypatch):
     assert data["subtitles"] == [{"code": "km", "name": "Khmer", "auto": False, "translated": False}]
 
 
+def test_info_turns_playlists_away(client, monkeypatch):
+    """Checks a playlist-only link points to batch mode instead of previewing one video."""
+    playlist = {"_type": "playlist", "title": "Ads", "entries": [{"url": "a"}, {"url": "b"}, {"url": "c"}]}
+    monkeypatch.setattr(webapp, "get_video_info", lambda url: playlist)
+    error = client.post("/info", data={"url": "https://x"}).get_json()["error"]
+    assert "3 videos" in error and "Paste several links or a playlist" in error
+
+
+def test_info_names_the_site(client, monkeypatch):
+    """Checks /info says which site the link is from."""
+    monkeypatch.setattr(webapp, "get_video_info", lambda url: {"title": "Clip", "extractor_key": "Vimeo"})
+    assert client.post("/info", data={"url": "https://x"}).get_json()["site"] == "Vimeo"
+
+
 def test_info_reports_errors(client, monkeypatch):
     """Checks /info turns an exception into an error message."""
     def boom(url):
@@ -163,6 +177,9 @@ def test_info_hides_unknown_errors_behind_a_plain_message(client, monkeypatch):
     ("ERROR: [generic] x: Unable to download webpage: Failed to resolve 'x'", "Couldn't reach the site. Check the link or try again"),
     ("ERROR: unable to download video data: HTTP Error 403: Forbidden", "The site refused the download. Try again in a moment"),
     ("ERROR: [youtube] abc: Requested format is not available", "That quality isn't available for this video"),
+    ("ERROR: [vimeo] 1: The web client only works when logged-in. Use --cookies", webapp.LOGIN_NEEDED),
+    ("ERROR: [Reddit] 6rr: Account authentication is required. Use --cookies-from-browser", webapp.LOGIN_NEEDED),
+    ("ERROR: [twitter] 64: No video could be found in this tweet", "This post has no video"),
     ("No subtitles found for that language", "No subtitles found for that language"),
 ])
 def test_friendly_error(message, expected):
