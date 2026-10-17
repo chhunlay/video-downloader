@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.13.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.14.0-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -12,7 +12,7 @@
 [![FFmpeg](https://img.shields.io/badge/FFmpeg-required-007808?logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
 [![Last commit](https://img.shields.io/github/last-commit/chhunlay/video-downloader)](https://github.com/chhunlay/video-downloader/commits)
 
-[Features](#features) · [Setup](#setup) · [Web app](#running-the-web-app) · [Telegram bot](#running-the-telegram-bot) · [Instagram / Facebook](#instagram--facebook-links) · [Tests](#running-the-tests) · [Changelog](CHANGELOG.md)
+[Features](#features) · [Setup](#setup) · [Web app](#running-the-web-app) · [Telegram bot](#running-the-telegram-bot) · [Sites](#supported-sites) · [Tests](#running-the-tests) · [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -43,6 +43,9 @@ Web app:
 - **Live progress** - one bar for the whole download (video and audio
   together, then merging and re-encoding), with the size, speed and time
   left underneath: `38 MB of 120 MB · 4.2 MB/s · 0:35 left`.
+- **Many sites** - YouTube and TikTok, plus Facebook, Instagram, X,
+  SoundCloud, Dailymotion, the Internet Archive and more (see
+  [Supported sites](#supported-sites)). The preview names the site.
 - **Send from your phone** - open the page as `/?url=<link>` and the
   preview loads by itself, so a Share shortcut on iPhone or Android (or a
   browser bookmark) can send a video straight to it.
@@ -142,17 +145,40 @@ javascript:location='http://localhost:5050/?url='+encodeURIComponent(location.hr
 4. Message your bot a YouTube or TikTok link. It'll show Low/HQ quality
    buttons, then send the video back once it's ready.
 
-## Instagram / Facebook links
+## Supported sites
 
-Both sites refuse most logged-out requests, so links from them only
-work once you provide real session cookies:
+Any site [yt-dlp](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+supports can be tried: paste the link, and if a preview appears it works.
+The preview names the site ("Vimeo · By ..."). Tested on 17 Oct 2026:
 
-1. Export cookies from a browser where you're logged into Instagram/
-   Facebook, using an extension like *Get cookies.txt LOCALLY*
-   (Netscape format).
-2. Save the exported file as `app/cookies.txt`.
+| Site | Works? | Notes |
+|---|---|---|
+| YouTube | Yes | Fast trims, subtitles, resolution picker |
+| TikTok | Yes | No watermark |
+| Facebook, Instagram | Yes | Public videos and reels; private posts need cookies |
+| X (Twitter) | Yes | Posts with a video |
+| Dailymotion, Twitch clips | Yes | |
+| SoundCloud, Bandcamp | Yes | Use **Audio** |
+| Internet Archive | Yes | Free public-domain films; a page with several videos is a playlist, so use batch mode |
+| Vimeo, Reddit | With cookies | Both now need a logged-in account |
+| Bilibili | Unreliable | Preview works; downloads from outside China are often cut off |
+| Netflix, Disney+, Prime Video, ... | No | Copy-protected (DRM) |
 
-YouTube and TikTok links work without this.
+A link to a whole playlist or collection asks you to use **Paste several
+links or a playlist**; a link to one video inside a playlist downloads
+just that video.
+
+### Cookies for login-only sites
+
+Vimeo, Reddit and private Instagram/Facebook posts only work with real
+session cookies:
+
+1. Export cookies from a browser where you're logged in to that site,
+   using an extension like *Get cookies.txt LOCALLY* (Netscape format).
+2. Save the exported file as `app/cookies.txt` and restart the app.
+
+The file is in `.gitignore`, so it never reaches GitHub. Use a spare
+account if you can: the cookies give full access to it.
 
 ## Running the tests
 
