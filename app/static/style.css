@@ -286,12 +286,6 @@ select.url-input option {
     background: var(--track-bg);
     color: var(--text-main);
 }
-.history-btn.primary {
-    background: var(--file-btn-bg);
-    border-color: var(--file-btn-bg);
-    color: var(--file-btn-text);
-}
-.history-btn.primary:hover { background: var(--file-btn-hover); }
 
 /* Subtitles on/off switch */
 .switch {
