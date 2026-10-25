@@ -560,11 +560,6 @@ function removeFromHistory(id) {
     renderHistory();
 }
 
-async function deleteJob(id) {
-    try { await fetch(`/jobs/${id}`, {method: 'DELETE'}); } catch (e) {}
-    removeFromHistory(id);
-}
-
 function relativeTime(ms) {
     const minutes = Math.floor((Date.now() - ms) / 60000);
     if (minutes < 1) return 'just now';
@@ -617,13 +612,6 @@ function renderHistory() {
         buttons.className = 'flex gap-1.5 shrink-0';
         if (expired) {
             buttons.append(historyButton('Remove', '', () => removeFromHistory(entry.id)));
-        } else {
-            const local = job && job.saved_locally;
-            if (job && job.status === 'done' && !local) {
-                buttons.append(historyButton('Save', 'primary', () => saveJobFiles(job)));
-            }
-            // Removing a local download only forgets it; the file stays in ~/Downloads
-            buttons.append(historyButton(local ? 'Remove' : 'Delete', '', () => deleteJob(entry.id)));
         }
 
         li.append(iconBox, text, buttons);
