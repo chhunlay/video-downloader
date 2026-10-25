@@ -5,6 +5,11 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.14.1] - 2026-10-25
+### Removed
+- The Save and Delete buttons in "Recent downloads". Finished files are
+  still kept for 24 hours; expired entries keep their Remove button.
+
 ## [0.14.0] - 2026-10-17
 ### Added
 - The preview names the site a link is from ("Vimeo · By ...").
