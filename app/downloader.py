@@ -3,6 +3,7 @@
 import os
 import re
 import subprocess
+import tempfile
 import time
 import urllib.parse
 
@@ -815,6 +816,9 @@ def shift_srt(path, start, end):
 
 # ---------- Cover art (audio) ----------
 
+# Seconds to wait on the cover image server (connect, and between received bytes)
+COVER_ART_TIMEOUT = 15
+
 def clean_title_for_search(title):
     """
     Strips bracketed junk like "[Official Video]" from a title.
@@ -912,38 +916,40 @@ def make_square(image_path):
         print("Thumbnail processing error:", e)
 
 
-def _fetch_cover_art(url, out_dir):
+def _fetch_cover_art(info, out_dir):
     """
     Downloads square cover art: iTunes artwork, else the video's largest thumbnail.
 
     Parameters:
-    url (str): The video link.
+    info (dict): yt-dlp info dict of the downloaded video (title and thumbnails are used).
     out_dir (str): Folder to save the image in.
 
     Returns:
     str/None: Path of the image, or None if none could be downloaded.
     """
-    info = get_video_info(url)
-    thumb_url = get_itunes_cover_art(info.get("title", ""))
+    thumb_url = get_itunes_cover_art(info.get("title") or "")
 
     if not thumb_url:
-        thumbnails = info.get("thumbnails", [])
+        thumbnails = [t for t in info.get("thumbnails") or [] if t.get("url")]
         if thumbnails:
-            thumb_url = max(thumbnails, key=lambda t: t.get("width", 0))["url"]
+            thumb_url = max(thumbnails, key=lambda t: t.get("width") or 0)["url"]
 
     if not thumb_url:
         return None
 
     thumb_path = os.path.join(out_dir, "thumb_temp.jpg")
     try:
-        response = requests.get(thumb_url, stream=True)
-        with open(thumb_path, "wb") as f:
-            for chunk in response.iter_content(1024):
-                f.write(chunk)
+        # A stalled image server must not hang the whole download
+        with requests.get(thumb_url, stream=True, timeout=COVER_ART_TIMEOUT) as response:
+            response.raise_for_status()
+            with open(thumb_path, "wb") as f:
+                for chunk in response.iter_content(64 * 1024):
+                    f.write(chunk)
         make_square(thumb_path)
         return thumb_path
     except Exception as e:
         print("Thumbnail download failed:", e)
+        _remove_if_exists(thumb_path)
         return None
 
 
@@ -1189,6 +1195,7 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
         filters.append("ass=burn_subs.ass:shaping=complex")
     scale_args = ["-vf", ",".join(filters)] if filters else []
 
+    stderr_log = None
     try:
         if burn_copy:
             converted = subprocess.run(["ffmpeg", "-y", "-i", burn_subtitles, burn_copy],
@@ -1197,6 +1204,9 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
                 print("Subtitle conversion failed:", (converted.stderr or b"")[-500:])
                 return False
 
+        # ffmpeg's log goes to a file, not a pipe: nothing reads a pipe while the
+        # progress loop runs, and a full one (lots of warnings) freezes ffmpeg
+        stderr_log = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
         process = subprocess.Popen(
             [
                 "ffmpeg", "-y", "-i", path,
@@ -1209,34 +1219,44 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
                 "-progress", "pipe:1", "-nostats",
                 tmp_path,
             ],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE, stderr=stderr_log, text=True,
             cwd=os.path.dirname(path),
         )
 
-        if progress_hook and duration:
-            last_percent = -1
-            for line in process.stdout:
-                if not line.startswith("out_time_ms="):
-                    continue
-                try:
-                    out_time_ms = int(line.strip().split("=", 1)[1])
-                except ValueError:
-                    continue
-                percent = min(99, int(out_time_ms / 1_000_000 / duration * 100))
-                if percent != last_percent:
-                    last_percent = percent
-                    report(percent)
+        try:
+            if progress_hook and duration:
+                last_percent = -1
+                for line in process.stdout:
+                    if not line.startswith("out_time_ms="):
+                        continue
+                    try:
+                        out_time_ms = int(line.strip().split("=", 1)[1])
+                    except ValueError:
+                        continue
+                    percent = min(99, int(out_time_ms / 1_000_000 / duration * 100))
+                    if percent != last_percent:
+                        last_percent = percent
+                        report(percent)
 
-        _, stderr = process.communicate(timeout=600)
+            process.communicate(timeout=600)
+        except BaseException:
+            # A cancel (raised by the hook) or a timeout must not leave ffmpeg running
+            process.kill()
+            process.wait()
+            raise
 
         if _swap_in(tmp_path, path, process.returncode == 0):
             report(100)
             return True
+        stderr_log.seek(0)
         print(
             "Social-media normalization failed, keeping original file:",
-            (stderr or "")[-500:],
+            stderr_log.read()[-500:],
         )
         return False
+    except yt_dlp.utils.DownloadCancelled:
+        _remove_if_exists(tmp_path)
+        raise
     except Exception as e:
         print("Social-media normalization failed, keeping original file:", e)
         _remove_if_exists(tmp_path)
@@ -1244,6 +1264,8 @@ def normalize_for_social(path, progress_hook=None, max_height=None, burn_subtitl
     finally:
         if burn_copy:
             _remove_if_exists(burn_copy)
+        if stderr_log:
+            stderr_log.close()
 
 
 # ---------- Download ----------
@@ -1408,13 +1430,14 @@ def download_media(url, dtype, out_dir, progress_hook=None, resolution=None,
     if progress_hook:
         ydl_opts['progress_hooks'] = [progress_hook]
 
-    thumb_path = _fetch_cover_art(url, out_dir) if dtype == "audio" else None
-
     if trim:
         info, effective_opts = _download_trimmed(ydl_opts, url, progress_hook, out_dir)
     else:
         info, effective_opts = extract_info_with_fallback(
             ydl_opts, url, download=True, setup=_before_download_setup(progress_hook))
+
+    # The download's own info has the title and thumbnails; no second lookup needed
+    thumb_path = _fetch_cover_art(info, out_dir) if dtype == "audio" else None
 
     # prepare_filename() applies the same truncation/sanitizing as the outtmpl
     with yt_dlp.YoutubeDL(effective_opts) as ydl:
