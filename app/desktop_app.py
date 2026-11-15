@@ -42,6 +42,7 @@ def run_flask(port):
 def main():
     """Starts the server and opens the app window; returns when the window closes."""
     port = find_free_port()
+    flask_app.prepare_store()
 
     server_thread = threading.Thread(target=run_flask, args=(port,), daemon=True)
     server_thread.start()

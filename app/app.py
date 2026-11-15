@@ -621,6 +621,17 @@ def stop_tunnel(tunnel):
         tunnel.kill()
 
 
+def prepare_store():
+    """
+    Loads jobs from the last run and starts the 24-hour cleanup.
+
+    Every way of starting the server (app.py, desktop_app.py) must call this,
+    or old downloads are never deleted.
+    """
+    store.load()
+    store.start_cleanup_thread()
+
+
 def main(argv=None):
     """
     Runs the web app; with --tunnel, also one public tunnel that closes when the app stops.
@@ -637,8 +648,7 @@ def main(argv=None):
                         help="also open a public *.trycloudflare.com link (needs cloudflared)")
     args = parser.parse_args(argv)
 
-    store.load()
-    store.start_cleanup_thread()
+    prepare_store()
 
     # `kill` (SIGTERM) normally skips finally blocks; turn it into a normal exit
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))

@@ -5,6 +5,19 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.14.2] - 2026-11-15
+### Fixed
+- Cancelling a download while it says "Optimizing" now stops ffmpeg too;
+  before, the re-encode kept running in the background until it finished.
+- A re-encode can no longer freeze on "Optimizing" forever when ffmpeg
+  prints a lot of warnings (its log now goes to a file, not a pipe).
+- Audio downloads can no longer hang on a slow cover-art image server
+  (15-second timeout), and a broken image is skipped instead of saved.
+- Audio downloads are a few seconds faster: the cover art uses the
+  download's own details instead of looking the video up a second time.
+- The desktop app now deletes finished files after 24 hours, like the
+  web app; before, they stayed in the temp folder for good.
+
 ## [0.14.1] - 2026-10-25
 ### Removed
 - The Save and Delete buttons in "Recent downloads". Finished files are

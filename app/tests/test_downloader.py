@@ -344,7 +344,7 @@ def capture_ydl_opts(tmp_path, monkeypatch):
 
     monkeypatch.setattr(downloader, "extract_info_with_fallback", fake_extract)
     monkeypatch.setattr(downloader, "normalize_for_social", lambda *a, **k: None)
-    monkeypatch.setattr(downloader, "_fetch_cover_art", lambda url, out_dir: None)
+    monkeypatch.setattr(downloader, "_fetch_cover_art", lambda info, out_dir: None)
     return captured
 
 
@@ -942,7 +942,7 @@ def no_audio_extras(monkeypatch):
     Parameters:
     monkeypatch (pytest.MonkeyPatch): pytest's patcher.
     """
-    monkeypatch.setattr(downloader, "_fetch_cover_art", lambda url, out_dir: None)
+    monkeypatch.setattr(downloader, "_fetch_cover_art", lambda info, out_dir: None)
 
 
 def test_trim_uses_the_relay(tmp_path, monkeypatch, no_audio_extras):
@@ -1114,3 +1114,112 @@ def test_download_media_downloads_one_video_not_its_playlist(tmp_path, capture_y
     """Checks a single download of a watch?v=...&list=... link gets just that video."""
     downloader.download_media("https://youtube.com/watch?v=a&list=b", "video", str(tmp_path))
     assert capture_ydl_opts["noplaylist"] is True
+
+
+# ---------- Re-encode process and cover art ----------
+
+class RecordingPopen:
+    """A fake ffmpeg that prints progress lines and records how it was started and stopped."""
+
+    instances = []
+
+    def __init__(self, args, **kwargs):
+        self.args, self.kwargs = args, kwargs
+        self.killed = False
+        self.returncode = None
+        self.stdout = iter(["out_time_ms=1000000\n", "out_time_ms=5000000\n"])
+        RecordingPopen.instances.append(self)
+
+    def communicate(self, timeout=None):
+        self.returncode = 1
+        return "", None
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+@pytest.fixture
+def fake_reencode(tmp_path, monkeypatch):
+    """
+    Sets up a video that needs a re-encode, with ffmpeg replaced by RecordingPopen.
+
+    Returns:
+    pathlib.Path: The video.
+    """
+    RecordingPopen.instances = []
+    video = tmp_path / "Clip.mp4"
+    video.write_bytes(b"video")
+    monkeypatch.setattr(downloader, "_already_social_safe", lambda path: False)
+    monkeypatch.setattr(downloader, "_get_source_fps", lambda path: "30")
+    monkeypatch.setattr(downloader, "_get_duration_seconds", lambda path: 10.0)
+    monkeypatch.setattr(downloader.subprocess, "Popen", RecordingPopen)
+    return video
+
+
+def test_cancel_during_reencode_stops_ffmpeg(fake_reencode):
+    """Checks a cancel raised by the progress hook kills ffmpeg and stops the download."""
+    def hook(d):
+        raise yt_dlp.utils.DownloadCancelled("Job deleted")
+
+    with pytest.raises(yt_dlp.utils.DownloadCancelled):
+        downloader.normalize_for_social(str(fake_reencode), progress_hook=hook)
+    assert RecordingPopen.instances[0].killed
+
+
+def test_reencode_log_does_not_use_a_pipe(fake_reencode):
+    """Checks ffmpeg's log goes to a file, so a full pipe can't freeze the re-encode."""
+    assert downloader.normalize_for_social(str(fake_reencode), progress_hook=lambda d: None) is False
+    stderr = RecordingPopen.instances[0].kwargs["stderr"]
+    assert stderr is not downloader.subprocess.PIPE
+    assert hasattr(stderr, "fileno")
+
+
+def test_audio_cover_art_uses_the_downloads_info(tmp_path, monkeypatch):
+    """Checks audio downloads pass the download's info to the cover art step, with no second lookup."""
+    def fake_extract(opts, url, download, setup=None):
+        (tmp_path / "Song.mp3").write_bytes(b"audio")
+        return {"title": "Song", "ext": "webm", "thumbnails": []}, opts
+
+    def no_lookup(url):
+        raise AssertionError("get_video_info must not be called")
+
+    seen = {}
+    monkeypatch.setattr(downloader, "extract_info_with_fallback", fake_extract)
+    monkeypatch.setattr(downloader, "get_video_info", no_lookup)
+    monkeypatch.setattr(downloader, "_fetch_cover_art",
+                        lambda info, out_dir: seen.setdefault("title", info["title"]) and None)
+    downloader.download_media("https://youtu.be/x", "audio", str(tmp_path))
+    assert seen["title"] == "Song"
+
+
+def test_cover_art_download_has_a_timeout(tmp_path, monkeypatch):
+    """Checks the cover image request has a timeout, so a stalled server can't hang the download."""
+    calls = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, size):
+            return iter([b"jpeg"])
+
+    def fake_get(url, **kwargs):
+        calls.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr(downloader, "get_itunes_cover_art", lambda title: None)
+    monkeypatch.setattr(downloader, "make_square", lambda path: None)
+    monkeypatch.setattr(downloader.requests, "get", fake_get)
+    info = {"title": "Song", "thumbnails": [{"url": "https://i/a.jpg", "width": None},
+                                            {"url": "https://i/b.jpg", "width": 1280}]}
+    assert downloader._fetch_cover_art(info, str(tmp_path)) == str(tmp_path / "thumb_temp.jpg")
+    assert calls["timeout"] == downloader.COVER_ART_TIMEOUT
