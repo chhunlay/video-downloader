@@ -5,6 +5,11 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.15.0] - 2026-11-21
+### Changed
+- "Recent downloads" shows the newest 5 downloads, with a "Show N more"
+  button for the rest (and "Show less" to fold them back).
+
 ## [0.14.2] - 2026-11-15
 ### Fixed
 - Cancelling a download while it says "Optimizing" now stops ffmpeg too;
