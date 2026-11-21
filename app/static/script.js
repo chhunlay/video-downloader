@@ -535,7 +535,9 @@ async function startDownload(dtype) {
 // ---------- History (this browser only) ----------
 const HISTORY_KEY = 'video-downloader-history';
 const HISTORY_LIMIT = 50;
+const HISTORY_SHOWN = 5;  // rows shown before "Show N more"
 let historyJobs = {};  // id -> job fields from the server, or null when expired
+let historyExpanded = false;
 
 function loadHistory() {
     try {
@@ -582,7 +584,13 @@ function renderHistory() {
     const entries = loadHistory();
     $('historySection').classList.toggle('hidden', entries.length === 0);
 
-    $('historyList').replaceChildren(...entries.map(entry => {
+    // Newest few only, unless the viewer clicked "Show N more"
+    const hiddenCount = Math.max(0, entries.length - HISTORY_SHOWN);
+    const shown = historyExpanded ? entries : entries.slice(0, HISTORY_SHOWN);
+    $('historyMore').classList.toggle('hidden', hiddenCount === 0);
+    $('historyMore').textContent = historyExpanded ? 'Show less' : `Show ${hiddenCount} more`;
+
+    $('historyList').replaceChildren(...shown.map(entry => {
         const job = historyJobs[entry.id];
         const expired = job === null;
         const li = document.createElement('li');
@@ -618,6 +626,11 @@ function renderHistory() {
         return li;
     }));
 }
+
+$('historyMore').addEventListener('click', () => {
+    historyExpanded = !historyExpanded;
+    renderHistory();
+});
 
 async function refreshHistory() {
     const entries = loadHistory();

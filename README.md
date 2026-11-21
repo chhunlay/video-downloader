@@ -50,7 +50,8 @@ Web app:
   preview loads by itself, so a Share shortcut on iPhone or Android (or a
   browser bookmark) can send a video straight to it.
 - **Recent downloads** - each browser keeps its own history, so you can
-  save a file again or delete it. The server keeps its copy for 24 hours.
+  save a file again or delete it. The newest 5 are shown, with a
+  **Show N more** button for the rest. The server keeps its copy for 24 hours.
 
 ## Requirements
 
