@@ -108,6 +108,21 @@ def site_name(info):
     return info.get('extractor_key') if key and key != 'generic' else None
 
 
+def site_from_url(url):
+    """
+    Names a link's site from the link alone, with no network call (for the download stats).
+
+    Parameters:
+    url (str): The video link.
+
+    Returns:
+    str/None: Same naming as site_name(), e.g. "YouTube" or "example.com".
+    """
+    # yt-dlp's last extractor (Generic) accepts any link, so this always finds one
+    extractor = next(ie for ie in yt_dlp.extractor.gen_extractor_classes() if ie.suitable(url))
+    return site_name({'extractor_key': extractor.ie_key(), 'webpage_url': url})
+
+
 # ---------- yt-dlp ----------
 
 def extract_info_with_retry(ydl, url, download, attempts=5, delay=3):

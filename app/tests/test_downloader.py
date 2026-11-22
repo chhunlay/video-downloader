@@ -1094,6 +1094,23 @@ def test_site_name(info, expected):
     assert downloader.site_name(info) == expected
 
 
+@pytest.mark.parametrize("url, expected", [
+    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "YouTube"),
+    ("https://youtu.be/dQw4w9WgXcQ", "YouTube"),
+    ("https://www.tiktok.com/@user/video/7300000000000000000", "TikTok"),
+    ("https://www.example.com/clip.mp4", "example.com"),
+])
+def test_site_from_url(url, expected):
+    """
+    Checks a link is named by its site without looking it up online.
+
+    Parameters:
+    url (str): The link.
+    expected (str): The expected name.
+    """
+    assert downloader.site_from_url(url) == expected
+
+
 # ---------- Playlists in single mode ----------
 
 def test_get_video_info_reads_one_video_and_flat_playlists(monkeypatch):

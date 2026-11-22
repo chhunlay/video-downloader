@@ -4,7 +4,7 @@
 
 **Download YouTube and TikTok videos, watermark-free and ready to re-post, from the web or Telegram.**
 
-[![Version](https://img.shields.io/badge/version-0.15.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.16.0-blue)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026.8.19-FF0000?logo=youtube&logoColor=white)](https://github.com/yt-dlp/yt-dlp)
@@ -52,6 +52,8 @@ Web app:
 - **Recent downloads** - each browser keeps its own history, so you can
   save a file again or delete it. The newest 5 are shown, with a
   **Show N more** button for the rest. The server keeps its copy for 24 hours.
+- **Download counts** - under the page: `128 downloads · 14 this week ·
+  70% video, 30% audio · YouTube most used` ("No downloads yet" before the first one).
 
 ## Requirements
 
@@ -83,6 +85,11 @@ Finished files are saved by your browser (to `~/Downloads` by default).
 The server's working copies live outside the project, in
 `~/Library/Caches/Video Downloader/` on macOS (the temp folder elsewhere),
 and are deleted after 24 hours.
+The download counts are kept for good in
+`~/Library/Application Support/Video Downloader/download-stats.jsonl` on
+macOS (`%APPDATA%` on Windows). Each line holds only the time, type, site
+and size of one finished download, never the link or title. Delete the file
+to start counting from zero.
 
 To also get a public link, install
 [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
@@ -207,6 +214,7 @@ PyInstaller) - no Python install needed on the machine that runs it.
 app/
   app.py                 Flask web app
   jobs.py                Per-download jobs: one folder + job.json each, 24 h cleanup
+  stats.py               Download counts under the page (one line per download)
   version.py             App version shown in the page footer (matches CHANGELOG.md)
   telegram_bot.py        Telegram bot
   downloader.py          Shared yt-dlp/ffmpeg download + re-encode logic

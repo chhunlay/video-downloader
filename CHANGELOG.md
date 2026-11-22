@@ -5,6 +5,13 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.16.0] - 2026-11-22
+### Added
+- Download counts under the page: total, this week, video/audio split
+  and the most used site ("No downloads yet" before the first one).
+  Every browser and device adds to the same count. Only the time, type,
+  site and size are saved, never the link or title.
+
 ## [0.15.0] - 2026-11-21
 ### Changed
 - "Recent downloads" shows the newest 5 downloads, with a "Show N more"
