@@ -475,6 +475,7 @@ function trackJob(jobId) {
             evt.close();
             activeJobId = null;
             refreshHistory();
+            loadStats();
         }
     };
     evt.onerror = () => evt.close();
@@ -647,6 +648,42 @@ async function refreshHistory() {
     renderHistory();
 }
 
+// ---------- Download counts ----------
+/**
+ * Shows the download counts under the page, e.g. "128 downloads · 14 this week · ...".
+ * Says "No downloads yet" before the first one; stays hidden if the server can't be reached.
+ */
+async function loadStats() {
+    let s;
+    try {
+        const response = await fetch('/stats');
+        if (!response.ok) return;
+        s = await response.json();
+    } catch (e) {
+        return;
+    }
+
+    $('statsLine').classList.remove('hidden');
+    if (!s.total) {
+        $('statsLine').textContent = 'No downloads yet';
+        return;
+    }
+    const parts = [
+        `${s.total} download${s.total === 1 ? '' : 's'}`,
+        `${s.this_week} this week`,
+        `${s.video_percent}% video, ${s.audio_percent}% audio`,
+        s.top_site && `${s.top_site} most used`,
+    ].filter(Boolean);
+
+    // Each part stays on one line, so a narrow screen wraps between parts
+    $('statsLine').replaceChildren(...parts.flatMap((text, i) => {
+        const span = document.createElement('span');
+        span.className = 'whitespace-nowrap';
+        span.textContent = text;
+        return i ? [' · ', span] : [span];
+    }));
+}
+
 // ---------- Shared links ----------
 // First http(s) link in a ?url= or ?text= value (phones may share "Title https://...")
 function sharedLinkFrom(search) {
@@ -673,3 +710,4 @@ window.addEventListener('pageshow', () => {
     applySharedLink();
 });
 refreshHistory();
+loadStats();

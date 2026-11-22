@@ -37,12 +37,13 @@ class InlineThread:
 
 
 @pytest.fixture
-def store(tmp_path, monkeypatch):
+def store(tmp_path, tmp_path_factory, monkeypatch):
     """
     Gives the app a job store in a temp folder and runs workers synchronously.
 
     Parameters:
     tmp_path (pathlib.Path): pytest's temp folder.
+    tmp_path_factory (pytest.TempPathFactory): Makes the separate stats folder.
     monkeypatch (pytest.MonkeyPatch): pytest's patcher.
 
     Returns:
@@ -59,6 +60,8 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp, "download_media", no_real_downloads)
     # Never touch the real ~/Downloads
     monkeypatch.setattr(webapp, "SAVE_DIR", str(tmp_path / "Downloads"))
+    # Never touch the real stats file; kept outside the store folder like the real one
+    monkeypatch.setattr(webapp, "STATS_FILE", str(tmp_path_factory.mktemp("stats") / "stats.jsonl"))
     return job_store
 
 
@@ -201,6 +204,31 @@ def test_download_single_success(client, store, monkeypatch):
     assert job.status == "done"
     assert job.files == ["clip.mp4"]
     assert job.title == "clip"
+
+
+def test_download_counts_in_stats(client, monkeypatch):
+    """Checks a finished download is counted on /stats with its site and type."""
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    start(client, url="https://www.youtube.com/watch?v=abc", type="audio")
+    assert client.get("/stats").get_json() == {
+        "total": 1, "this_week": 1, "video_percent": 0, "audio_percent": 100, "top_site": "YouTube",
+    }
+
+
+def test_failed_download_not_counted(client, monkeypatch):
+    """Checks a failed download is not counted on /stats."""
+    error = yt_dlp.utils.DownloadError("ERROR: [youtube] abc123: Video unavailable")
+    monkeypatch.setattr(webapp, "download_media", fake_download(error=error))
+    start(client)
+    assert client.get("/stats").get_json()["total"] == 0
+
+
+def test_stats_error_keeps_download(client, store, monkeypatch):
+    """Checks a stats file that can't be written doesn't fail the download."""
+    monkeypatch.setattr(webapp, "download_media", fake_download())
+    monkeypatch.setattr(webapp, "STATS_FILE", os.devnull + "/stats.jsonl")
+    job_id = start(client).get_json()["job_id"]
+    assert store.get(job_id).status == "done"
 
 
 def test_download_passes_options(client, monkeypatch):
@@ -583,6 +611,13 @@ def test_batch_partial_failure(client, store, monkeypatch):
     assert job.status == "done"
     assert sorted(zip_contents(store, job)) == ["01 - Video.mp4", "03 - Video.mp4"]
     assert job.failed_items == [{"url": "https://b", "error": "This video is unavailable"}]
+
+
+def test_batch_counts_each_item(client, monkeypatch):
+    """Checks a batch counts each downloaded link, not the failed ones."""
+    monkeypatch.setattr(webapp, "download_media", fake_batch_download(fail_urls=("https://b",)))
+    start_batch(client, ["https://a", "https://b", "https://c"])
+    assert client.get("/stats").get_json()["total"] == 2
 
 
 def test_batch_all_fail(client, store, monkeypatch):

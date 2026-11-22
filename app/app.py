@@ -25,10 +25,12 @@ from downloader import (
     get_video_info,
     is_subtitle_progress,
     parse_timestamp,
+    site_from_url,
     site_name,
     subtitle_path_for,
     validate_trim,
 )
+import stats
 from jobs import FINAL_STATUSES, JobStore
 from version import __version__
 
@@ -41,6 +43,11 @@ _CACHE_ROOT = (os.path.expanduser("~/Library/Caches") if sys.platform == "darwin
 DOWNLOAD_DIR = os.path.join(_CACHE_ROOT, "Video Downloader")
 
 store = JobStore(DOWNLOAD_DIR)
+
+# Download counts for the footer, kept for good, so outside the 24-hour folder
+_DATA_ROOT = (os.path.expanduser("~/Library/Application Support") if sys.platform == "darwin"
+              else os.environ.get("APPDATA") or os.path.expanduser("~/.local/share"))
+STATS_FILE = os.path.join(_DATA_ROOT, "Video Downloader", "download-stats.jsonl")
 
 DTYPES = ("video", "audio", "tiktok")
 SUBTITLE_MODES = ("srt", "burn")
@@ -129,6 +136,21 @@ def finish_job(job_id, paths, **fields):
         return
     store.update(job_id, status="done", percent=100,
                  files=[os.path.basename(p) for p in paths], **fields)
+
+
+def count_download(url, dtype, size):
+    """
+    Adds one finished download to the footer stats; a stats error never fails the download.
+
+    Parameters:
+    url (str): The video link (only its site is saved).
+    dtype (str): "video", "audio" or "tiktok".
+    size (int): The file size in bytes.
+    """
+    try:
+        stats.record(STATS_FILE, dtype, site_from_url(url), size)
+    except Exception as e:
+        print("Could not save download stats:", e)
 
 
 def parse_download_form(form):
@@ -334,6 +356,8 @@ def run_single(job_id, url):
         subtitles = options.get("subtitles")
         if subtitles and os.path.exists(subtitle_path_for(path, subtitles["lang"])):
             paths.append(subtitle_path_for(path, subtitles["lang"]))
+        # Counted first, so the page reads the new total once it sees "done"
+        count_download(url, job.dtype, os.path.getsize(path))
         finish_job(job_id, paths, title=os.path.splitext(os.path.basename(path))[0])
     except Exception as e:
         store.update(job_id, status="error", error=friendly_error(e))
@@ -359,7 +383,7 @@ def run_batch(job_id, urls):
     store.update(job_id, status="downloading", item_count=len(urls),
                  title=f"Batch ({len(urls)} items)")
 
-    downloaded = []  # (path, name in zip)
+    downloaded = []  # (path, name in zip, link, size)
     failed = []
     for index, url in enumerate(urls):
         if store.get(job_id) is None:
@@ -376,7 +400,8 @@ def run_batch(job_id, urls):
                 trim=None,
                 subtitles=None,
             )
-            downloaded.append((path, f"{index + 1:02d} - {os.path.basename(path)}"))
+            downloaded.append((path, f"{index + 1:02d} - {os.path.basename(path)}", url,
+                               os.path.getsize(path)))
         except Exception as e:
             failed.append({"url": url, "error": friendly_error(e)})
             store.update(job_id, failed_items=list(failed))
@@ -392,7 +417,7 @@ def run_batch(job_id, urls):
     try:
         # Media is already compressed, so store it as-is
         with zipfile.ZipFile(os.path.join(folder, zip_name), "w", zipfile.ZIP_STORED) as z:
-            for path, arcname in downloaded:
+            for path, arcname, *_ in downloaded:
                 z.write(path, arcname)
     except Exception as e:
         store.update(job_id, status="error", error=friendly_error(e))
@@ -401,6 +426,8 @@ def run_batch(job_id, urls):
         for index in range(len(urls)):
             shutil.rmtree(os.path.join(folder, f"{index + 1:02d}"), ignore_errors=True)
 
+    for _, _, url, size in downloaded:
+        count_download(url, job.dtype, size)
     finish_job(job_id, [os.path.join(folder, zip_name)])
 
 
@@ -457,6 +484,17 @@ def download():
         worker, target = run_single, parsed["url"]
     threading.Thread(target=run_job, args=(worker, job.id, target)).start()
     return jsonify({"job_id": job.id})
+
+
+@app.route("/stats")
+def download_stats():
+    """
+    Returns the download counts shown under the page.
+
+    Returns:
+    Response: stats.summary() as JSON.
+    """
+    return jsonify(stats.summary(STATS_FILE))
 
 
 @app.route("/progress/<job_id>")
