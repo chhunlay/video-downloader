@@ -5,6 +5,14 @@ release and ordered oldest to newest. The project has no formal version tags
 in git, so versions here are inferred from the commit history to give each
 meaningful batch of work its own entry.
 
+## [0.17.0] - 2026-11-24
+### Added
+- The download counts show the total size downloaded (e.g. "4.2 GB").
+
+### Changed
+- Telegram bot downloads now add to the same counts as the web page,
+  once the video has reached the chat.
+
 ## [0.16.0] - 2026-11-22
 ### Added
 - Download counts under the page: total, this week, video/audio split

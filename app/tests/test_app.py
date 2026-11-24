@@ -212,6 +212,7 @@ def test_download_counts_in_stats(client, monkeypatch):
     start(client, url="https://www.youtube.com/watch?v=abc", type="audio")
     assert client.get("/stats").get_json() == {
         "total": 1, "this_week": 1, "video_percent": 0, "audio_percent": 100, "top_site": "YouTube",
+        "total_bytes": len(b"bytes-clip.mp4"),
     }
 
 

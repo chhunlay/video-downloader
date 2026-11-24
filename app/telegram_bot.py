@@ -25,6 +25,7 @@ from telegram.ext import (
     filters,
 )
 
+import stats
 from downloader import (
     download_media,
     download_percent,
@@ -38,6 +39,9 @@ from downloader import (
 load_dotenv()
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
+# Same download counts as the web page
+STATS_FILE = stats.STATS_FILE
 
 # Max height for the "Low" option (smaller file, faster upload)
 FAST_QUALITY_MAX_HEIGHT = os.environ.get("FAST_MODE_MAX_HEIGHT") or "480"
@@ -408,6 +412,8 @@ async def run_download_and_send(update, context, status_msg, text, dtype, resolu
                 )
                 return
 
+        # Counted only once the video reached the chat
+        stats.count_download(STATS_FILE, text, dtype, size)
         await status_msg.delete()
 
 

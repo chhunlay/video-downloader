@@ -10,6 +10,7 @@ def test_summary_without_file(tmp_path):
     """Checks a missing stats file reads as no downloads."""
     assert stats.summary(str(tmp_path / "none.jsonl"), now=NOW) == {
         "total": 0, "this_week": 0, "video_percent": 0, "audio_percent": 0, "top_site": None,
+        "total_bytes": 0,
     }
 
 
@@ -31,6 +32,7 @@ def test_summary_adds_up(tmp_path):
 
     assert stats.summary(path, now=NOW) == {
         "total": 5, "this_week": 3, "video_percent": 80, "audio_percent": 20, "top_site": "YouTube",
+        "total_bytes": 500,
     }
 
 
@@ -52,3 +54,16 @@ def test_record_saves_no_link_or_title(tmp_path):
     path = tmp_path / "stats.jsonl"
     stats.record(str(path), "video", "YouTube", 42, now=NOW)
     assert path.read_text() == '{"time": 1800000000, "type": "video", "site": "YouTube", "bytes": 42}\n'
+
+
+def test_count_download_names_the_site(tmp_path):
+    """Checks count_download() saves the site's name, not the link."""
+    path = tmp_path / "stats.jsonl"
+    stats.count_download(str(path), "https://youtu.be/dQw4w9WgXcQ", "video", 42)
+    assert '"site": "YouTube"' in path.read_text()
+    assert "youtu.be" not in path.read_text()
+
+
+def test_count_download_never_raises(tmp_path):
+    """Checks a stats file that can't be written is logged, not raised."""
+    stats.count_download("/dev/null/stats.jsonl", "https://youtu.be/abc", "video", 42)

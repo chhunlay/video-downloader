@@ -1,7 +1,13 @@
-"""Tests for the small helpers in telegram_bot.py."""
+"""Tests for the small helpers in telegram_bot.py, and its download counting."""
+
+import asyncio
+import os
+from types import SimpleNamespace
 
 import pytest
+from telegram.error import TimedOut
 
+import stats
 import telegram_bot as bot
 
 
@@ -60,3 +66,90 @@ def test_render_bar(percent, filled):
 def test_progress_text():
     """Checks the progress message includes label, bar and percent."""
     assert bot.progress_text(bot.DOWNLOADING, 50) == f"{bot.DOWNLOADING}  {bot.render_bar(50)}  50%"
+
+
+# ---------- Download counts ----------
+
+class FakeMessage:
+    """Stands in for the bot's progress message."""
+
+    async def edit_text(self, *args, **kwargs):
+        """Ignores progress text."""
+
+    async def delete(self):
+        """Ignores the delete."""
+
+
+class FakeBot:
+    """Stands in for context.bot; send_video fails when told to."""
+
+    def __init__(self, send_error=None):
+        """
+        Stores the error send_video should raise.
+
+        Parameters:
+        send_error (Exception/None): Raised by every send_video call.
+        """
+        self.send_error = send_error
+
+    async def send_chat_action(self, **kwargs):
+        """Ignores the typing indicator."""
+
+    async def send_video(self, **kwargs):
+        """Fails if told to, else accepts the video."""
+        if self.send_error:
+            raise self.send_error
+
+
+def run_bot_download(monkeypatch, tmp_path, send_error=None, download_error=None):
+    """
+    Runs run_download_and_send with fake Telegram objects and a fake download.
+
+    Parameters:
+    monkeypatch (pytest.MonkeyPatch): pytest's patcher.
+    tmp_path (pathlib.Path): Holds the stats file.
+    send_error (Exception/None): Makes the upload fail.
+    download_error (Exception/None): Makes the download fail.
+
+    Returns:
+    dict: stats.summary() of the temp stats file afterwards.
+    """
+    stats_file = str(tmp_path / "stats.jsonl")
+    monkeypatch.setattr(bot, "STATS_FILE", stats_file)
+    monkeypatch.setattr(bot, "probe_dimensions", lambda path: (1280, 720, 10))
+
+    def fake_download(url, dtype, out_dir, **kwargs):
+        if download_error:
+            raise download_error
+        path = os.path.join(out_dir, "clip.mp4")
+        with open(path, "wb") as f:
+            f.write(b"12345")
+        return path
+
+    monkeypatch.setattr(bot, "download_media", fake_download)
+    update = SimpleNamespace(effective_chat=SimpleNamespace(id=1))
+    context = SimpleNamespace(bot=FakeBot(send_error))
+    asyncio.run(bot.run_download_and_send(
+        update, context, FakeMessage(), "https://youtu.be/dQw4w9WgXcQ", "video", None,
+    ))
+    return stats.summary(stats_file)
+
+
+def test_bot_download_is_counted(monkeypatch, tmp_path):
+    """Checks a video the bot sent is counted with its site and size."""
+    summary = run_bot_download(monkeypatch, tmp_path)
+    assert summary["total"] == 1
+    assert summary["top_site"] == "YouTube"
+    assert summary["total_bytes"] == 5
+
+
+def test_bot_failed_download_not_counted(monkeypatch, tmp_path):
+    """Checks a failed bot download is not counted."""
+    summary = run_bot_download(monkeypatch, tmp_path, download_error=Exception("Video unavailable"))
+    assert summary["total"] == 0
+
+
+def test_bot_failed_upload_not_counted(monkeypatch, tmp_path):
+    """Checks a video that never reached the chat is not counted."""
+    summary = run_bot_download(monkeypatch, tmp_path, send_error=TimedOut())
+    assert summary["total"] == 0
