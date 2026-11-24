@@ -2,9 +2,17 @@
 
 import json
 import os
+import sys
 import threading
 import time
 from collections import Counter
+
+from downloader import site_from_url
+
+# Shared by the web app and the Telegram bot; outside the 24-hour download folder
+_DATA_ROOT = (os.path.expanduser("~/Library/Application Support") if sys.platform == "darwin"
+              else os.environ.get("APPDATA") or os.path.expanduser("~/.local/share"))
+STATS_FILE = os.path.join(_DATA_ROOT, "Video Downloader", "download-stats.jsonl")
 
 WEEK_SECONDS = 7 * 24 * 3600
 
@@ -26,6 +34,22 @@ def record(path, dtype, site, size, now=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with _lock, open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(line) + "\n")
+
+
+def count_download(path, url, dtype, size):
+    """
+    Saves one finished download from its link; a stats error is printed, never raised.
+
+    Parameters:
+    path (str): The stats file.
+    url (str): The video link (only its site is saved).
+    dtype (str): "video", "audio" or "tiktok".
+    size (int): The file size in bytes.
+    """
+    try:
+        record(path, dtype, site_from_url(url), size)
+    except Exception as e:
+        print("Could not save download stats:", e)
 
 
 def _read(path):
@@ -66,8 +90,8 @@ def summary(path, now=None):
     now (float/None): The current time; defaults to now.
 
     Returns:
-    dict: {"total", "this_week", "video_percent", "audio_percent", "top_site"};
-    top_site is None when nothing was downloaded.
+    dict: {"total", "this_week", "video_percent", "audio_percent", "top_site",
+    "total_bytes"}; top_site is None when nothing was downloaded.
     """
     now = now if now is not None else time.time()
     entries = _read(path)
@@ -84,4 +108,5 @@ def summary(path, now=None):
         "video_percent": 100 - audio_percent if total else 0,
         "audio_percent": audio_percent,
         "top_site": sites.most_common(1)[0][0] if sites else None,
+        "total_bytes": sum(e["bytes"] for e in entries if isinstance(e.get("bytes"), int)),
     }

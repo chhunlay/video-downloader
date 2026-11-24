@@ -52,8 +52,9 @@ Web app:
 - **Recent downloads** - each browser keeps its own history, so you can
   save a file again or delete it. The newest 5 are shown, with a
   **Show N more** button for the rest. The server keeps its copy for 24 hours.
-- **Download counts** - under the page: `128 downloads · 14 this week ·
-  70% video, 30% audio · YouTube most used` ("No downloads yet" before the first one).
+- **Download counts** - under the page: `128 downloads · 4.2 GB ·
+  14 this week · 70% video, 30% audio · YouTube most used` ("No downloads
+  yet" before the first one). Telegram bot downloads count too.
 
 ## Requirements
 
@@ -87,8 +88,9 @@ The server's working copies live outside the project, in
 and are deleted after 24 hours.
 The download counts are kept for good in
 `~/Library/Application Support/Video Downloader/download-stats.jsonl` on
-macOS (`%APPDATA%` on Windows). Each line holds only the time, type, site
-and size of one finished download, never the link or title. Delete the file
+macOS (`%APPDATA%` on Windows), shared by the web app and the Telegram bot.
+Each line holds only the time, type, site and size of one finished
+download, never the link or title. Delete the file
 to start counting from zero.
 
 To also get a public link, install
@@ -214,7 +216,7 @@ PyInstaller) - no Python install needed on the machine that runs it.
 app/
   app.py                 Flask web app
   jobs.py                Per-download jobs: one folder + job.json each, 24 h cleanup
-  stats.py               Download counts under the page (one line per download)
+  stats.py               Download counts under the page (web app + Telegram bot)
   version.py             App version shown in the page footer (matches CHANGELOG.md)
   telegram_bot.py        Telegram bot
   downloader.py          Shared yt-dlp/ffmpeg download + re-encode logic

@@ -650,7 +650,7 @@ async function refreshHistory() {
 
 // ---------- Download counts ----------
 /**
- * Shows the download counts under the page, e.g. "128 downloads · 14 this week · ...".
+ * Shows the download counts under the page, e.g. "128 downloads · 4.2 GB · 14 this week · ...".
  * Says "No downloads yet" before the first one; stays hidden if the server can't be reached.
  */
 async function loadStats() {
@@ -670,6 +670,7 @@ async function loadStats() {
     }
     const parts = [
         `${s.total} download${s.total === 1 ? '' : 's'}`,
+        s.total_bytes > 0 && formatBytes(s.total_bytes),
         `${s.this_week} this week`,
         `${s.video_percent}% video, ${s.audio_percent}% audio`,
         s.top_site && `${s.top_site} most used`,
