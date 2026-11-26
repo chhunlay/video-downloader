@@ -37,7 +37,7 @@ class _Stream:
         """
         self.url, self.headers, self.size, self.refresh = url, headers, size, refresh
         self.refreshed = False
-  
+
 
 class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     """HTTP server with one thread per request, so ffmpeg can read streams side by side."""
